@@ -38,7 +38,7 @@ PYEOF
   fi
   exit "$code"
 }
-trap terminate EXIT
+trap terminate EXIT INT TERM
 
 mkdir -p /workspace/logs /workspace/weights /workspace/data
 cd /workspace
