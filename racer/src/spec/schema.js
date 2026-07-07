@@ -79,6 +79,7 @@ export const DEFAULT_SPEC = {
     gripScale: 1.0, // <1 = slippery/drifty, >1 = on rails
     boostScale: 1.0,
     color: 0xff6a00,
+    body: 'sport', // silhouette: 'sport' | 'muscle' | 'buggy' (visual only)
   },
   entities: {
     monsters: [], // [{type, count, scale?, speedScale?, color?}]
@@ -154,6 +155,9 @@ export function validateSpec(spec) {
   if (!(spec.world.widthScale >= 0.6 && spec.world.widthScale <= 1.8)) fail('widthScale out of [0.6, 1.8]');
   for (const k of ['topSpeedScale', 'accelScale', 'gripScale', 'boostScale']) {
     if (!(spec.vehicle[k] >= 0.4 && spec.vehicle[k] <= 2.2)) fail(`vehicle.${k} out of [0.4, 2.2]`);
+  }
+  if (!['sport', 'muscle', 'buggy'].includes(spec.vehicle.body)) {
+    fail(`unknown vehicle body '${spec.vehicle.body}'`);
   }
   return spec;
 }

@@ -55,11 +55,11 @@ export function createView(track, { width, height, spec = null }) {
 
   buildGround(scene, track, grass);
   buildTrackSurface(scene, track, pal);
-  buildWalls(scene, track);
+  buildWalls(scene, track, pal);
   buildStartGantry(scene, track);
   const padRig = buildBoostPads(scene, track);
   buildScenery(scene, track, pal);
-  const carRig = buildCar(scene, spec.vehicle.color);
+  const carRig = buildCar(scene, spec.vehicle.color, spec.vehicle.body);
   const entityRig = buildEntities(scene, spec, track);
 
   // --- chase camera
@@ -302,11 +302,12 @@ function buildTrackSurface(scene, track, pal) {
   }
 }
 
-function buildWalls(scene, track) {
+function buildWalls(scene, track, pal) {
   const N = track.n;
   const H = 1.15;
-  const base = new THREE.Color(0xc9ccd4);
-  const tint = new THREE.Color(0xaab6c9);
+  // walls take the biome's cast so each game family has a distinct corridor
+  const base = new THREE.Color().setHSL(pal.skyHue, 0.14, Math.max(0.22, pal.skyLight * 0.95));
+  const tint = base.clone().offsetHSL(0.02, 0.06, -0.09);
   for (const side of [1, -1]) {
     const positions = new Float32Array(N * 2 * 3);
     const colors = new Float32Array(N * 2 * 3);
@@ -618,7 +619,44 @@ function updateEntities(rig, world) {
   }
 }
 
-function buildCar(scene, color = 0xff6a00) {
+// Three body silhouettes (visual only — the collision footprint is shared):
+// sport = low wedge + spoiler, muscle = tall wide slab + hood scoop,
+// buggy = short cab + roll cage + oversized wheels.
+const BODY_STYLES = {
+  sport: {
+    chassis: [4.0, 0.55, 1.85, 0.55],
+    nose: [0.9, 0.35, 1.5, 0.45, 2.35],
+    cabin: [1.7, 0.55, 1.35, 1.05, -0.25],
+    spoiler: true,
+    scoop: false,
+    cage: false,
+    wheelR: 0.38,
+    wheelW: 0.32,
+  },
+  muscle: {
+    chassis: [4.3, 0.85, 2.1, 0.7],
+    nose: [1.0, 0.55, 1.9, 0.6, 2.5],
+    cabin: [1.6, 0.6, 1.7, 1.35, -0.7],
+    spoiler: false,
+    scoop: true,
+    cage: false,
+    wheelR: 0.44,
+    wheelW: 0.4,
+  },
+  buggy: {
+    chassis: [3.3, 0.45, 1.6, 0.75],
+    nose: [0.7, 0.3, 1.2, 0.65, 1.9],
+    cabin: [1.3, 0.5, 1.2, 1.25, -0.1],
+    spoiler: false,
+    scoop: false,
+    cage: true,
+    wheelR: 0.52,
+    wheelW: 0.42,
+  },
+};
+
+function buildCar(scene, color = 0xff6a00, bodyStyle = 'sport') {
+  const style = BODY_STYLES[bodyStyle] || BODY_STYLES.sport;
   const group = new THREE.Group();
   const body = new THREE.Group();
   group.add(body);
@@ -626,38 +664,64 @@ function buildCar(scene, color = 0xff6a00) {
   const paint = new THREE.MeshLambertMaterial({ color });
   const dark = new THREE.MeshLambertMaterial({ color: 0x1c1e24 });
 
-  const chassis = new THREE.Mesh(new THREE.BoxGeometry(4.0, 0.55, 1.85), paint);
-  chassis.position.y = 0.55;
+  const [cl, ch, cw, cy] = style.chassis;
+  const chassis = new THREE.Mesh(new THREE.BoxGeometry(cl, ch, cw), paint);
+  chassis.position.y = cy;
   body.add(chassis);
 
-  const nose = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.35, 1.5), paint);
-  nose.position.set(2.35, 0.45, 0);
+  const [nl, nh, nw, ny, nx] = style.nose;
+  const nose = new THREE.Mesh(new THREE.BoxGeometry(nl, nh, nw), paint);
+  nose.position.set(nx, ny, 0);
   body.add(nose);
 
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.55, 1.35), dark);
-  cabin.position.set(-0.25, 1.05, 0);
+  const [bl, bh, bw, by, bx] = style.cabin;
+  const cabin = new THREE.Mesh(new THREE.BoxGeometry(bl, bh, bw), dark);
+  cabin.position.set(bx, by, 0);
   body.add(cabin);
 
-  const spoiler = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.1, 2.0), dark);
-  spoiler.position.set(-2.0, 1.15, 0);
-  body.add(spoiler);
-  for (const z of [-0.7, 0.7]) {
-    const strut = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.5, 0.12), dark);
-    strut.position.set(-2.0, 0.9, z);
-    body.add(strut);
+  if (style.spoiler) {
+    const spoiler = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.1, 2.0), dark);
+    spoiler.position.set(-2.0, 1.15, 0);
+    body.add(spoiler);
+    for (const z of [-0.7, 0.7]) {
+      const strut = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.5, 0.12), dark);
+      strut.position.set(-2.0, 0.9, z);
+      body.add(strut);
+    }
+  }
+  if (style.scoop) {
+    const scoop = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.28, 0.7), dark);
+    scoop.position.set(1.5, style.chassis[3] + style.chassis[1] / 2 + 0.12, 0);
+    body.add(scoop);
+  }
+  if (style.cage) {
+    const barMat = dark;
+    for (const [x0, z0] of [
+      [0.55, 0.6],
+      [0.55, -0.6],
+      [-0.75, 0.6],
+      [-0.75, -0.6],
+    ]) {
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.9, 0.1), barMat);
+      bar.position.set(x0, 1.35, z0);
+      body.add(bar);
+    }
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.1, 1.35), barMat);
+    roof.position.set(-0.1, 1.85, 0);
+    body.add(roof);
   }
 
   // brake lights (shared material toggled in update)
   const brakeMat = new THREE.MeshBasicMaterial({ color: 0x5a0f0f });
   for (const z of [-0.55, 0.55]) {
     const light = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.22, 0.5), brakeMat);
-    light.position.set(-2.06, 0.6, z);
+    light.position.set(-(cl / 2) - 0.06, 0.6, z);
     body.add(light);
   }
 
   // wheels: geometry pre-rotated so the axle is local Z; front pairs sit in
   // pivot groups that yaw with the steering angle
-  const wheelGeo = new THREE.CylinderGeometry(0.38, 0.38, 0.32, 12);
+  const wheelGeo = new THREE.CylinderGeometry(style.wheelR, style.wheelR, style.wheelW, 12);
   wheelGeo.rotateX(Math.PI / 2);
   const wheelMat = new THREE.MeshLambertMaterial({ color: 0x111114 });
   const wheels = [];
@@ -669,7 +733,7 @@ function buildCar(scene, color = 0xff6a00) {
     [-1.35, -0.95, false],
   ]) {
     const pivot = new THREE.Group();
-    pivot.position.set(wx, 0.38, wz);
+    pivot.position.set(wx, style.wheelR, wz);
     const wheel = new THREE.Mesh(wheelGeo, wheelMat);
     pivot.add(wheel);
     body.add(pivot);
@@ -683,7 +747,7 @@ function buildCar(scene, color = 0xff6a00) {
     new THREE.MeshBasicMaterial({ color: 0xffb31a }),
   );
   flame.rotation.z = Math.PI / 2; // cone +Y axis -> -X (backwards)
-  flame.position.set(-2.9, 0.55, 0);
+  flame.position.set(-(cl / 2) - 0.9, 0.55, 0);
   flame.visible = false;
   group.add(flame);
 

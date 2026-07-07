@@ -50,6 +50,10 @@ export const KEYWORDS = {
     few: ['few'],
     many: ['many', 'lots', 'horde', 'hordes'],
   },
+  body: {
+    muscle: ['muscle', 'truck', 'heavy', 'tank'],
+    buggy: ['buggy', 'kart', 'offroad'],
+  },
 };
 
 // canonical hud element order so extraction order never leaks into the spec
@@ -144,6 +148,10 @@ function extract(prompt) {
     kw.vehicle.topSpeedScale = 0.8;
     flags.topSpeed = true;
   }
+
+  // car body silhouette
+  if (hasAny(KEYWORDS.body.muscle)) kw.vehicle.body = 'muscle';
+  else if (hasAny(KEYWORDS.body.buggy)) kw.vehicle.body = 'buggy';
 
   // track geometry
   if (hasAny(KEYWORDS.track.wide)) {
