@@ -1,0 +1,14 @@
+# Racing keybinds — the 6-key vocabulary of the Three.js racing recorder.
+# `target_fps` is the action sample rate. The world model runs frames at `video.fps` (20) and
+# actions at this rate (20), i.e. one action per video frame (the released default); see
+# configs/actions/rocket_league.yaml for how the two rates can be decoupled.
+# ORDER IS LOAD-BEARING: it defines the multi-hot columns and the checkpoint layout. Freeze the
+# list and its order before training; the recorder's .jsonl must use exactly these strings.
+target_fps: 20
+valid_keys:
+  - W            # throttle
+  - S            # brake / reverse
+  - A            # steer left
+  - D            # steer right
+  - Space        # handbrake
+  - LShiftKey    # boost / nitro

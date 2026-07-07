@@ -1,0 +1,7 @@
+node_modules/
+episodes/
+dataset/
+pack/.venv/
+.env
+.env.local
+pack/.ffmpeg/

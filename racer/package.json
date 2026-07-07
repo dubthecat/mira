@@ -1,0 +1,18 @@
+{
+  "name": "mira-racer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Three.js racing game + headless recorder that emits MIRA-format world-model training data",
+  "scripts": {
+    "dev": "node src/record/serve.js 8712",
+    "record": "node src/record/headless.js",
+    "test": "node test/sim_check.mjs"
+  },
+  "dependencies": {
+    "three": "^0.178.0"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^24.10.0"
+  }
+}
