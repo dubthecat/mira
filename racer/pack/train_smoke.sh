@@ -32,9 +32,9 @@ for f in glob.glob("/workspace/logs/*"):
         print("upload failed:", f, e)
 PYEOF
   if [ -n "${RUNPOD_API_KEY:-}" ] && [ -n "${RUNPOD_POD_ID:-}" ]; then
-    curl -s -X POST "https://api.runpod.io/graphql?api_key=${RUNPOD_API_KEY}" \
-      -H 'content-type: application/json' \
-      -d "{\"query\":\"mutation { podTerminate(input: {podId: \\\"${RUNPOD_POD_ID}\\\"}) }\"}" || true
+    # documented terminate: DELETE /v1/pods/{id} (docs.runpod.io/pods/manage-pods)
+    curl -s -X DELETE "https://rest.runpod.io/v1/pods/${RUNPOD_POD_ID}" \
+      -H "Authorization: Bearer ${RUNPOD_API_KEY}" || true
   fi
   exit "$code"
 }

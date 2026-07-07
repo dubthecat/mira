@@ -1,12 +1,21 @@
 """Deploy the smoke-train pod on RunPod (cost-bounded, self-terminating).
 
-Usage:
-    RUNPOD_API_KEY=... HF_TOKEN=... python3 deploy_smoke.py [--gpu "NVIDIA A100 80GB PCIe"]
+Uses the REST API's exec-form `dockerStartCmd` ARRAY (POST /v1/pods), which
+docker receives token-for-token. The GraphQL `dockerArgs` string is tokenized
+by RunPod itself — NOT handed to a shell — so quoted `bash -c '...'` payloads
+get mangled into invalid argv, the container dies instantly, and the pod
+restart-loops while billing (observed: uptime bouncing 0-17s forever). Never
+use dockerArgs for nontrivial commands.
 
-The pod fetches racer/pack/train_smoke.sh from the public GitHub branch and
-runs it under `timeout 7200`; the script self-terminates the pod on any exit,
-and a fallback terminate runs after the timeout, so worst-case spend is
-~2h * community price.
+Also load-bearing (from the OpenAPI spec, rest.runpod.io/v1/openapi.json):
+- volumeInGb DEFAULTS TO 20 — must be set to 0 explicitly
+- env is a plain {name: value} object (GraphQL wanted [{key, value}])
+- replacing CMD means /start.sh never runs: no sshd/jupyter, headless only
+- there is NO logs API: the script self-reports by uploading its log to HF,
+  and self-terminates in an EXIT/TERM trap (DELETE /v1/pods/{id})
+
+Usage:
+    RUNPOD_API_KEY=... HF_TOKEN=... python3 deploy_smoke.py [--gpu ...]
 """
 
 from __future__ import annotations
@@ -17,46 +26,49 @@ import os
 import sys
 import urllib.request
 
-API = "https://api.runpod.io/graphql?api_key={key}"
+REST = "https://rest.runpod.io/v1"
 RAW_SCRIPT = "https://raw.githubusercontent.com/dubthecat/mira/racer-pipeline/racer/pack/train_smoke.sh"
 
-FETCH_PY = f"import urllib.request;urllib.request.urlretrieve('{RAW_SCRIPT}','/train_smoke.sh')"
-TERMINATE_PY = (
-    "import os,json,urllib.request;"
-    "pid=os.environ.get('RUNPOD_POD_ID','');"
-    "q={'query':'mutation { podTerminate(input: {podId: \"'+pid+'\"}) }'};"
-    "r=urllib.request.Request('https://api.runpod.io/graphql?api_key='"
-    "+os.environ['RUNPOD_API_KEY'],data=json.dumps(q).encode(),"
-    "headers={'content-type':'application/json'});"
-    "print(urllib.request.urlopen(r).read()[:200])"
-)
-DOCKER_ARGS = (
-    "bash -c 'python3 -c \"$FETCH_PY\" && timeout 7200 bash /train_smoke.sh; "
-    "python3 -c \"$TERMINATE_PY\"'"
-)
-
-
-def gql(key: str, query: str, variables: dict | None = None) -> dict:
-    body = json.dumps({"query": query, "variables": variables or {}}).encode()
-    req = urllib.request.Request(
-        API.format(key=key),
-        data=body,
-        headers={"content-type": "application/json", "user-agent": "curl/8.5.0"},
+# One argv token each — the script element may contain anything.
+def start_cmd() -> list[str]:
+    boot = (
+        "set -u; "
+        f"(curl -fsSL {RAW_SCRIPT} -o /train_smoke.sh || "
+        f"python3 -c \"import urllib.request;urllib.request.urlretrieve('{RAW_SCRIPT}','/train_smoke.sh')\"); "
+        "timeout 7200 bash /train_smoke.sh; "
+        # belt-and-braces: terminate even if the script's own trap failed
+        'curl -s -X DELETE "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID" '
+        '-H "Authorization: Bearer $RUNPOD_API_KEY"; '
+        "sleep 5"
     )
-    resp = json.loads(urllib.request.urlopen(req).read())
-    if resp.get("errors"):
-        raise RuntimeError(json.dumps(resp["errors"]))
-    return resp["data"]
+    return ["bash", "-c", boot]
+
+
+GPUS_DEFAULT = ["NVIDIA A100 80GB PCIe", "NVIDIA A100-SXM4-80GB", "NVIDIA H100 PCIe"]
+
+
+def rest(key: str, method: str, path: str, body: dict | None = None) -> dict:
+    req = urllib.request.Request(
+        REST + path,
+        method=method,
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={
+            "content-type": "application/json",
+            "authorization": f"Bearer {key}",
+            "user-agent": "curl/8.5.0",
+        },
+    )
+    with urllib.request.urlopen(req) as r:
+        return json.loads(r.read() or "{}")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--gpu", default="NVIDIA A100 80GB PCIe")
-    # runpod's own image: pre-cached on most community hosts (a generic
-    # dockerhub devel image once sat in "pulling" for an hour of billed time)
+    parser.add_argument("--gpu", action="append", default=None, help="GPU type id (repeatable, tried in order)")
     parser.add_argument("--image", default="runpod/pytorch:1.0.7-cu1281-torch280-ubuntu2404")
     parser.add_argument("--repo", default="WilliamBolduc/racer-world-model-v1")
     parser.add_argument("--run-name", default="smoke1")
+    parser.add_argument("--disk", type=int, default=80)
     args = parser.parse_args()
 
     key = os.environ.get("RUNPOD_API_KEY")
@@ -65,40 +77,39 @@ def main() -> int:
         print("error: set RUNPOD_API_KEY and HF_TOKEN", file=sys.stderr)
         return 2
 
-    env = [
-        {"key": "HF_TOKEN", "value": hf},
-        {"key": "HF_DATASET_REPO", "value": args.repo},
-        {"key": "GIT_REPO", "value": "https://github.com/dubthecat/mira"},
-        {"key": "GIT_BRANCH", "value": "racer-pipeline"},
-        {"key": "RUNPOD_API_KEY", "value": key},
-        {"key": "RUN_NAME", "value": args.run_name},
-        {"key": "FETCH_PY", "value": FETCH_PY},
-        {"key": "TERMINATE_PY", "value": TERMINATE_PY},
-    ]
-    pod_input = {
-        "cloudType": "COMMUNITY",
-        "gpuCount": 1,
-        "gpuTypeId": args.gpu,
+    body_base = {
         "name": f"racer-{args.run_name}",
         "imageName": args.image,
-        "dockerArgs": DOCKER_ARGS,
-        "containerDiskInGb": 80,
-        "volumeInGb": 0,
-        "minVcpuCount": 8,
-        "minMemoryInGb": 48,
-        "env": env,
+        "cloudType": "COMMUNITY",
+        "computeType": "GPU",
+        "gpuCount": 1,
+        "interruptible": False,
+        "containerDiskInGb": args.disk,
+        "volumeInGb": 0,  # explicit: REST default silently attaches 20GB
+        "env": {
+            "HF_TOKEN": hf,
+            "HF_DATASET_REPO": args.repo,
+            "GIT_REPO": "https://github.com/dubthecat/mira",
+            "GIT_BRANCH": "racer-pipeline",
+            "RUNPOD_API_KEY": key,
+            "RUN_NAME": args.run_name,
+        },
+        "dockerEntrypoint": [],
+        "dockerStartCmd": start_cmd(),
     }
-    data = gql(
-        key,
-        "mutation($input: PodFindAndDeployOnDemandInput) {"
-        " podFindAndDeployOnDemand(input: $input) { id imageName machineId costPerHr } }",
-        {"input": pod_input},
-    )
-    pod = data["podFindAndDeployOnDemand"]
-    print(json.dumps(pod, indent=2))
-    print(f"\npod {pod['id']} deployed at ${pod.get('costPerHr', '?')}/hr — "
-          f"logs land in hf://{args.repo}/runs/{args.run_name}/ when it finishes")
-    return 0
+    for gpu in args.gpu or GPUS_DEFAULT:
+        try:
+            pod = rest(key, "POST", "/pods", {**body_base, "gpuTypeIds": [gpu]})
+            print(json.dumps({k: pod.get(k) for k in ("id", "imageName", "costPerHr", "machineId")}, indent=2))
+            print(f"\npod {pod['id']} on {gpu} — logs will land in "
+                  f"hf://{args.repo}/runs/{args.run_name}/ (script self-reports; no logs API exists)")
+            return 0
+        except urllib.error.HTTPError as e:
+            print(f"{gpu}: HTTP {e.code} {e.read()[:200]}", file=sys.stderr)
+        except Exception as e:
+            print(f"{gpu}: {e}", file=sys.stderr)
+    print("error: no GPU type could be deployed", file=sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":
