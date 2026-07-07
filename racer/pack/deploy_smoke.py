@@ -69,6 +69,7 @@ def main() -> int:
     parser.add_argument("--repo", default="WilliamBolduc/racer-world-model-v1")
     parser.add_argument("--run-name", default="smoke1")
     parser.add_argument("--disk", type=int, default=80)
+    parser.add_argument("--cloud", default="SECURE", choices=["SECURE", "COMMUNITY"])
     args = parser.parse_args()
 
     key = os.environ.get("RUNPOD_API_KEY")
@@ -80,7 +81,9 @@ def main() -> int:
     body_base = {
         "name": f"racer-{args.run_name}",
         "imageName": args.image,
-        "cloudType": "COMMUNITY",
+        # SECURE = datacenter fleet: pricier than community but image pulls
+        # actually complete (two community hosts sat in pull-limbo for hours)
+        "cloudType": args.cloud,
         "computeType": "GPU",
         "gpuCount": 1,
         "interruptible": False,

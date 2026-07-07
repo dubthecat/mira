@@ -1,9 +1,13 @@
-// HUD smoke check: imports hud.js in plain node (no browser) by stubbing the
-// one DOM entry point it uses — document.createElement('canvas') — with a
-// recording 2D-context fake. Verifies createHud/render/dispose don't throw,
-// the renderer contract (autoClear saved/restored, depth-only clear), mesh
-// budget, bar layout math and minimap containment. Run:
-//   node racer/test/hud_check.mjs
+// HUD smoke check + parametric sweeps: imports hud.js in plain node (no
+// browser) by stubbing the one DOM entry point it uses —
+// document.createElement('canvas') — with a recording 2D-context fake.
+// Verifies createHud/render/dispose don't throw, the renderer contract
+// (autoClear saved/restored, depth-only clear), mesh budget, bar layout math
+// and minimap containment; then sweeps every HUD element against its engine
+// variable at the mesh/UV level (digit glyphs decoded from atlas UV rects,
+// bar fill widths, health segment lighting/color, minimap fit+flip transform,
+// resolution/scale bboxes, 200-render allocation stability). Run:
+//   node racer/test/hud_check.mjs        (add --expose-gc for the heap check)
 // (three resolves from racer/node_modules for imports made by racer/src files)
 
 let failures = 0;

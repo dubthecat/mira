@@ -60,6 +60,19 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq && apt-get install -y -qq ffmpeg git curl > /dev/null
 pip install -q -U huggingface_hub
 
+# beacon: prove the container ran at all (there is no RunPod logs API — if
+# this marker never appears, the image/command never started)
+python3 - << 'PYEOF' || true
+import os, io
+from huggingface_hub import HfApi
+api = HfApi(token=os.environ["HF_TOKEN"])
+msg = f"started pod={os.environ.get('RUNPOD_POD_ID','?')} gpu={os.popen('nvidia-smi --query-gpu=name --format=csv,noheader').read().strip()}\n"
+api.upload_file(path_or_fileobj=io.BytesIO(msg.encode()),
+                path_in_repo=f"runs/{os.environ.get('RUN_NAME','smoke')}/STARTED.txt",
+                repo_id=os.environ["HF_DATASET_REPO"], repo_type="dataset")
+print("[smoke] beacon uploaded")
+PYEOF
+
 # --- code + dataset ---------------------------------------------------------
 git clone --depth 1 -b "${GIT_BRANCH:-racer-pipeline}" "${GIT_REPO:?}" mira
 python3 - << 'PYEOF'
