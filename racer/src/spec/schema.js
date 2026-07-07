@@ -136,9 +136,14 @@ export function validateSpec(spec) {
   for (const m of spec.entities.monsters) {
     if (!MONSTER_TYPES[m.type]) fail(`unknown monster type '${m.type}' (have: ${Object.keys(MONSTER_TYPES)})`);
     if (!(m.count >= 0 && m.count <= 40)) fail(`monster count out of range: ${m.count}`);
+    if (m.scale !== undefined && !(m.scale >= 0.4 && m.scale <= 3)) fail(`monster scale out of [0.4, 3]: ${m.scale}`);
+    if (m.speedScale !== undefined && !(m.speedScale >= 0.3 && m.speedScale <= 3)) {
+      fail(`monster speedScale out of [0.3, 3]: ${m.speedScale}`);
+    }
   }
   for (const p of spec.entities.pickups) {
     if (!['health', 'ammo'].includes(p.kind)) fail(`unknown pickup kind '${p.kind}'`);
+    if (!(p.count >= 0 && p.count <= 40)) fail(`pickup count out of range: ${p.count}`);
   }
   for (const el of spec.hud.elements) {
     if (!['speed', 'boost', 'health', 'ammo', 'score', 'lap', 'minimap'].includes(el)) {

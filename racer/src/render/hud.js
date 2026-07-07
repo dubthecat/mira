@@ -113,7 +113,10 @@ export function createHud(spec, { width, height }) {
   const materials = [];
 
   const mat = (opts) => {
-    const m = new THREE.MeshBasicMaterial({ depthTest: false, depthWrite: false, ...opts });
+    // transparent:true puts every HUD mesh in the transparent render list, so
+    // renderOrder deterministically governs paint order (the opaque pass would
+    // otherwise draw before, i.e. under, transparent backgrounds)
+    const m = new THREE.MeshBasicMaterial({ depthTest: false, depthWrite: false, transparent: true, ...opts });
     materials.push(m);
     return m;
   };

@@ -83,6 +83,19 @@ torch.save(m.state_dict(), "/workspace/weights/dinov3_vitl16_pretrain_lvd1689m-8
 print("saved random-init dinov3_vitl16 weights (SMOKE ONLY)")
 PYEOF
 
+# --- guard: dataset action vocab must match the actions config we train with
+python3 - << 'PYEOF'
+import json, re, sys
+idx = json.load(open("/workspace/data/train/index.json"))
+ds_keys = idx.get("action_keys")  # written by pack_dataset.py for spec datasets
+yaml_txt = open("configs/actions/racing.yaml").read()
+cfg_keys = re.findall(r"^\s*-\s*(\S+)\s*$", yaml_txt, re.M)
+if ds_keys is not None and ds_keys != cfg_keys:
+    sys.exit(f"FATAL: dataset action_keys {ds_keys} != configs/actions/racing.yaml {cfg_keys} "
+             f"(order-sensitive) — install the dataset's actions.yaml before training")
+print(f"[smoke] action vocab ok: {ds_keys or cfg_keys}")
+PYEOF
+
 # --- 1) codec smoke ----------------------------------------------------------
 timeout 2400 python scripts/train_codec.py \
   dataset=racing \

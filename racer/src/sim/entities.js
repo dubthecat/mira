@@ -21,6 +21,9 @@ export class EntitySystem {
     this.monsters = [];
     this.projectiles = []; // {x,y,vx,vy,ttl,hostile,damage,hintIdx,alive}
     this.pickups = [];
+    // own accumulated clock: step() runs 3x per 20 Hz frame with the same
+    // frame index, so frame*dt would run entity motion at 1/3 speed
+    this.t = 0;
     this._spawnMonsters();
     this._spawnPickups();
   }
@@ -65,6 +68,7 @@ export class EntitySystem {
           alive: true,
           respawnAt: -1,
           hitFlash: 0,
+          contactCd: 0,
           fireCooldown: this.rng.range(0.5, 2.0), // desync turret volleys
           // patroller endpoints: across the road at its s
           px0: q.x + nx * (q.halfWidth - 1.5),
@@ -119,6 +123,7 @@ export class EntitySystem {
   // One physics substep. Returns events; mutates world-owned car state via
   // the returned damage list (world applies health/invuln rules).
   step(car, frame, dt) {
+    this.t += dt;
     const events = [];
     let damageToCar = 0;
 
@@ -134,6 +139,7 @@ export class EntitySystem {
         continue;
       }
       if (m.hitFlash > 0) m.hitFlash--;
+      if (m.contactCd > 0) m.contactCd--;
 
       const dxc = car.x - m.x;
       const dyc = car.y - m.y;
@@ -150,7 +156,7 @@ export class EntitySystem {
           speed = m.cfg.speed;
         } else {
           // amble around the lair on a deterministic clock
-          const tPhase = frame * dt * 0.4 + m.phase;
+          const tPhase = this.t * 0.4 + m.phase;
           targetX = m.lairX + Math.cos(tPhase) * 8;
           targetY = m.lairY + Math.sin(tPhase * 0.8) * 8;
           speed = m.cfg.speed * 0.3;
@@ -162,13 +168,15 @@ export class EntitySystem {
       } else if (m.type === 'patroller') {
         // triangle-wave sweep between the two road edges
         const period = Math.hypot(m.px1 - m.px0, m.py1 - m.py0) / m.cfg.speed;
-        const ph = ((frame * dt + m.phase) / (2 * period)) % 1;
+        const ph = ((this.t + m.phase) / (2 * period)) % 1;
         const tt = ph < 0.5 ? ph * 2 : 2 - ph * 2;
         const nxOld = m.x;
         const nyOld = m.y;
         m.x = m.px0 + (m.px1 - m.px0) * tt;
         m.y = m.py0 + (m.py1 - m.py0) * tt;
-        m.heading = Math.atan2(m.y - nyOld, m.x - nxOld);
+        const ddx = m.x - nxOld;
+        const ddy = m.y - nyOld;
+        if (ddx !== 0 || ddy !== 0) m.heading = Math.atan2(ddy, ddx);
       } else if (m.type === 'turret') {
         m.heading = Math.atan2(dyc, dxc); // barrel tracks the car
         m.fireCooldown -= dt;
@@ -194,13 +202,18 @@ export class EntitySystem {
         }
       }
 
-      // contact damage (car-side rules applied by world)
-      if (distCar < m.cfg.size + 1.6 && m.type !== 'turret') {
+      // contact damage, gated by a per-monster cooldown so wave-positioned
+      // patrollers (whose position resets every substep) can't re-trigger
+      if (distCar < m.cfg.size + 1.6 && m.type !== 'turret' && !(m.contactCd > 0)) {
         damageToCar += m.cfg.damage;
-        // shove the monster back so contact doesn't re-trigger every substep
-        const push = m.cfg.size + 3.5;
-        m.x -= (dxc / Math.max(distCar, 0.1)) * push;
-        m.y -= (dyc / Math.max(distCar, 0.1)) * push;
+        m.contactCd = 45; // 0.75 s of substeps
+        if (m.type === 'chaser') {
+          // shove integrated-position monsters back for physical separation;
+          // patroller position is authoritative from the wave, don't touch it
+          const push = m.cfg.size + 3.5;
+          m.x -= (dxc / Math.max(distCar, 0.1)) * push;
+          m.y -= (dyc / Math.max(distCar, 0.1)) * push;
+        }
         events.push({ name: 'MonsterContact', data: { id: m.id, type: m.type } });
       }
     }

@@ -105,6 +105,8 @@ function encodeChunk(pngBuffers, outFile) {
 
 async function recordEpisode(page, args, seed, matchId, spec) {
   const dir = path.join(args.out, matchId);
+  // episodes are deterministic per (seed, spec): re-runs replace, never dup
+  await fs.rm(dir, { recursive: true, force: true });
   await fs.mkdir(dir, { recursive: true });
 
   // deterministic per-seed warmup, so starting states vary across episodes
@@ -194,11 +196,6 @@ async function main() {
   const server = createServer();
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const port = server.address().port;
-  const stamp = new Date()
-    .toISOString()
-    .slice(0, 19)
-    .replace(/[:.]/g, '-')
-    .replace('T', 'T'); // 2026-07-07T12-00-00, no dots
   console.log(
     `recording ${args.episodes} episodes x ${args.frames} frames ` +
       `(${args.width}x${args.height} @ ${FPS}fps, chunks of ${args.chunk}) ` +
@@ -241,7 +238,8 @@ async function main() {
         const idx = nextIdx++;
         if (idx >= seeds.length) break;
         const seed = seeds[idx];
-        const matchId = `racer-${stamp}-s${String(seed).padStart(7, '0')}`;
+        // deterministic id: same (seed, spec, out-dir) re-records in place
+        const matchId = `racer-s${String(seed).padStart(7, '0')}`;
         try {
           await recordEpisode(page, args, seed, matchId, spec);
           consecutiveFailures = 0;

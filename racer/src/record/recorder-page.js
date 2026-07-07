@@ -16,6 +16,7 @@ let world = null;
 let view = null;
 let hud = null;
 let renderer = null;
+let recordStartFrame = 0;
 
 function renderFrame() {
   renderer.render(view.scene, view.camera);
@@ -42,10 +43,13 @@ window.__init = (config) => {
   view = createView(world.track, { width: config.width, height: config.height, spec });
   hud = createHud(spec, { width: config.width, height: config.height });
 
-  // unrecorded warmup for varied starting states (speed, mid-corner, ...)
+  // unrecorded warmup for varied starting states (speed, mid-corner, ...).
+  // The frame counter stays MONOTONIC: entity clocks and respawn timers are
+  // keyed to it, and rewinding it teleports frame-clocked entities between
+  // recorded frames 0 and 1. Dataset-relative indices are rebased below.
   for (let i = 0; i < (config.warmupFrames || 0); i++) world.stepFrame();
-  world.frame = 0;
   world.events = [];
+  recordStartFrame = world.frame;
 
   // render frame 0 (camera initializes exactly on target — no settle drift)
   view.update(world, 1 / FPS);
@@ -80,8 +84,8 @@ window.__stepBatch = (n) => {
 
 window.__episodeMeta = () => ({
   seed: world.seed,
-  frames: world.frame,
-  events: world.events,
+  frames: world.frame - recordStartFrame,
+  events: world.events.map((e) => ({ ...e, frame: e.frame - recordStartFrame })),
   laps: world.lap,
   score: world.score,
   progress: Math.round(world.progress),

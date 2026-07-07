@@ -542,9 +542,15 @@ function buildEntities(scene, spec, track) {
     }
   }
 
-  // projectile pool (player + hostile share it; color set per frame)
+  // projectile pool sized to the sim's worst case: each turret keeps at most
+  // ceil(ttl/fireEvery)=2 shots alive; the player at most pellets*fireRate*ttl
+  const turretShots = spec.entities.monsters
+    .filter((g) => g.type === 'turret')
+    .reduce((n, g) => n + g.count * 2, 0);
+  const playerShots = spec.weapon.enabled ? (spec.weapon.kind === 'spread' ? 12 : 8) : 0;
+  const poolSize = Math.min(256, Math.max(16, turretShots + playerShots + 8));
   rig.projGeo = new THREE.SphereGeometry(0.32, 8, 6);
-  for (let i = 0; i < 96; i++) {
+  for (let i = 0; i < poolSize; i++) {
     const m = new THREE.Mesh(rig.projGeo, new THREE.MeshBasicMaterial({ color: 0x37e0ff }));
     m.visible = false;
     scene.add(m);
