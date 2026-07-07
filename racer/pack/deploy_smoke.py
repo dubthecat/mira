@@ -39,7 +39,9 @@ DOCKER_ARGS = (
 def gql(key: str, query: str, variables: dict | None = None) -> dict:
     body = json.dumps({"query": query, "variables": variables or {}}).encode()
     req = urllib.request.Request(
-        API.format(key=key), data=body, headers={"content-type": "application/json"}
+        API.format(key=key),
+        data=body,
+        headers={"content-type": "application/json", "user-agent": "curl/8.5.0"},
     )
     resp = json.loads(urllib.request.urlopen(req).read())
     if resp.get("errors"):
