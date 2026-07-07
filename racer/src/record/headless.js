@@ -32,6 +32,7 @@ function parseArgs(argv) {
     concurrency: Math.max(1, Math.min(4, os.cpus().length - 2)),
     batch: 20,
     chrome: '',
+    spec: '', // path to a GameSpec json (from forge/compile); empty = classic racing
     antialias: true,
   };
   for (let i = 2; i < argv.length; i++) {
@@ -102,7 +103,7 @@ function encodeChunk(pngBuffers, outFile) {
   });
 }
 
-async function recordEpisode(page, args, seed, matchId) {
+async function recordEpisode(page, args, seed, matchId, spec) {
   const dir = path.join(args.out, matchId);
   await fs.mkdir(dir, { recursive: true });
 
@@ -110,7 +111,7 @@ async function recordEpisode(page, args, seed, matchId) {
   const warmupFrames = (seed * 37) % 101;
   const info = await page.evaluate(
     (cfg) => window.__init(cfg),
-    { seed, width: args.width, height: args.height, warmupFrames, antialias: args.antialias },
+    { seed, width: args.width, height: args.height, warmupFrames, antialias: args.antialias, spec },
   );
 
   const actionLines = [];
@@ -166,7 +167,9 @@ async function recordEpisode(page, args, seed, matchId) {
         resolution: [args.width, args.height],
         trackLength: info.trackLength,
         actionKeys: info.actionKeys,
+        spec: spec || undefined,
         laps: meta.laps,
+        score: meta.score,
         progressMeters: meta.progress,
         events: meta.events,
       },
@@ -185,6 +188,7 @@ async function recordEpisode(page, args, seed, matchId) {
 async function main() {
   const args = parseArgs(process.argv);
   const chrome = findChrome(args.chrome);
+  const spec = args.spec ? JSON.parse(await fs.readFile(args.spec, 'utf8')) : null;
   await fs.mkdir(args.out, { recursive: true });
 
   const server = createServer();
@@ -239,7 +243,7 @@ async function main() {
         const seed = seeds[idx];
         const matchId = `racer-${stamp}-s${String(seed).padStart(7, '0')}`;
         try {
-          await recordEpisode(page, args, seed, matchId);
+          await recordEpisode(page, args, seed, matchId, spec);
           consecutiveFailures = 0;
         } catch (e) {
           failures++;

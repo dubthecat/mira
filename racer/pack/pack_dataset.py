@@ -8,7 +8,13 @@ match_id (no dots, no trailing `_c<digits>`), containing:
     actions.jsonl                           # one line per frame across the WHOLE episode
     physics.jsonl                           # optional, one line per frame across the whole episode
     meta.json                               # {"matchId", "seed", "fps", "frames", "chunkFrames",
-                                            #  "events", "track"}
+                                            #  "events", "track"[, "spec", "actionKeys"]}
+
+Episodes recorded from a GameSpec (headless.js --spec) carry `spec` + `actionKeys` in meta.json.
+Then: the index entry's `arena` becomes spec.name, the first episode's spec/actionKeys are copied
+into each split's index.json as top-level `game_spec`/`action_keys` (the Index schema is pydantic
+extra="allow"), every actions.jsonl key must be in the actionKeys vocabulary, and one pack run must
+hold exactly one spec — a mixed-spec pack would silently train one model on several games.
 
 Output layout (`--out DIR`), per the contract in racer/DATASET_CONTRACT.md:
 
@@ -59,6 +65,8 @@ class Episode:
     chunk_frames: list[int]
     arena: str | None
     has_physics: bool
+    spec: dict | None = None  # GameSpec from meta.json (episodes recorded with --spec)
+    action_keys: list[str] | None = None  # derived action vocabulary, ditto
 
     @property
     def frames(self) -> int:
@@ -96,8 +104,15 @@ def _arena(meta: dict) -> str | None:
     return f"seed{seed}" if seed is not None else None
 
 
-def _validate_jsonl(path: Path, match_id: str, expected_lines: int, what: str) -> None:
-    """Check a whole-episode jsonl has exactly `expected_lines` parseable lines."""
+def _validate_jsonl(
+    path: Path, match_id: str, expected_lines: int, what: str, allowed_keys: set[str] | None = None
+) -> None:
+    """Check a whole-episode jsonl has exactly `expected_lines` parseable lines.
+
+    With `allowed_keys` (spec-recorded actions.jsonl), every line's `keys` must also be a subset of
+    the spec's action vocabulary — a stray key would silently vanish at train time (KeyVocab drops
+    unknowns), so it is rejected here instead.
+    """
     lines = path.read_bytes().splitlines()
     if len(lines) != expected_lines:
         raise PackError(
@@ -107,9 +122,16 @@ def _validate_jsonl(path: Path, match_id: str, expected_lines: int, what: str) -
         if not line.strip():
             continue  # blank line = "no keys held this frame"; still counts as a frame
         try:
-            json.loads(line)
+            obj = json.loads(line)
         except json.JSONDecodeError as err:
             raise PackError(f"episode {match_id}: {what} line {i} is not valid JSON: {err}") from err
+        if allowed_keys is not None and isinstance(obj, dict):
+            unknown = [k for k in (obj.get("keys") or []) if k not in allowed_keys]
+            if unknown:
+                raise PackError(
+                    f"episode {match_id}: {what} line {i} has keys outside the spec's action "
+                    f"vocabulary: {unknown} (actionKeys: {sorted(allowed_keys)})"
+                )
 
 
 def load_episode(path: Path) -> Episode:
@@ -145,10 +167,22 @@ def load_episode(path: Path) -> Episode:
     if extra:
         print(f"[pack] warning: episode {match_id}: ignoring chunk files not in meta chunkFrames: {extra}")
 
+    spec = meta.get("spec")
+    if spec is not None and not isinstance(spec, dict):
+        raise PackError(f"episode {match_id}: meta.json 'spec' must be a JSON object")
+    action_keys = meta.get("actionKeys")
+    if action_keys is not None and not (
+        isinstance(action_keys, list) and all(isinstance(k, str) for k in action_keys)
+    ):
+        raise PackError(f"episode {match_id}: meta.json 'actionKeys' must be a list of strings")
+
     actions = path / "actions.jsonl"
     if not actions.is_file():
         raise PackError(f"episode {match_id}: missing actions.jsonl")
-    _validate_jsonl(actions, match_id, frames, "actions.jsonl")
+    _validate_jsonl(
+        actions, match_id, frames, "actions.jsonl",
+        allowed_keys=set(action_keys) if action_keys is not None else None,
+    )  # fmt: skip
 
     physics = path / "physics.jsonl"
     if physics.is_file():
@@ -159,8 +193,10 @@ def load_episode(path: Path) -> Episode:
         path=path,
         fps=fps,
         chunk_frames=chunk_frames,
-        arena=_arena(meta),
+        arena=str(spec["name"]) if spec is not None and spec.get("name") else _arena(meta),
         has_physics=physics.is_file(),
+        spec=spec,
+        action_keys=action_keys,
     )
 
 
@@ -185,6 +221,30 @@ def verify_chunk_frames(ep: Episode) -> None:
         if got != want:
             raise PackError(
                 f"episode {ep.match_id}: {mp4.name} has {got} frames but meta chunkFrames[{c}]={want}"
+            )
+
+
+def check_uniform_spec(episodes: list[Episode]) -> None:
+    """All episodes of one pack run must share one GameSpec (or all carry none).
+
+    Compares the spec JSON objects directly (canonical dumps, the specHash equivalence): a pack
+    mixing specs — or mixing spec'd and spec-less episodes — would silently train one model on
+    several different games.
+    """
+    first = next((ep for ep in episodes if ep.spec is not None), None)
+    if first is None:
+        return
+    canon = json.dumps(first.spec, sort_keys=True)
+    for ep in episodes:
+        if ep.spec is None:
+            raise PackError(
+                f"episode {ep.match_id}: has no spec in meta.json but {first.match_id} does — "
+                f"refusing to pack spec'd and spec-less episodes together"
+            )
+        if json.dumps(ep.spec, sort_keys=True) != canon:
+            raise PackError(
+                f"episode {ep.match_id}: spec differs from {first.match_id}'s — one dataset must "
+                f"come from exactly one GameSpec (pack each spec's episodes separately)"
             )
 
 
@@ -270,6 +330,12 @@ def write_split(out: Path, episodes: list[Episode], matches_per_shard: int) -> t
                 entries.append(_index_entry(ep, shard))
         n_shards += 1
     index = {"total_samples": len(entries), "entries": entries}
+    if episodes and episodes[0].spec is not None:
+        # extra top-level fields (Index is pydantic extra="allow"); check_uniform_spec already
+        # guaranteed the first episode's spec/actionKeys stand for the whole run
+        index["game_spec"] = episodes[0].spec
+        if episodes[0].action_keys is not None:
+            index["action_keys"] = list(episodes[0].action_keys)
     (out / "index.json").write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
     return len(entries), n_shards
 
@@ -318,6 +384,7 @@ def main(argv: list[str] | None = None) -> int:
             if verify:
                 verify_chunk_frames(ep)
             episodes.append(ep)
+        check_uniform_spec(episodes)
         test_ids = [s for s in args.test_ids.split(",") if s] if args.test_ids is not None else None
         train, test = split_episodes(episodes, args.test_every, test_ids)
         for name, split in (("train", train), ("test", test)):

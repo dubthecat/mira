@@ -13,6 +13,7 @@
 //   visually observable, tightening the action->pixels association.
 
 import * as THREE from 'three';
+import { makeSpec, BIOMES } from '../spec/schema.js';
 
 const CAM = { back: 7.4, height: 3.1, lookAhead: 7.0, lookUp: 1.15, posLag: 7.0, fovLag: 4.0 };
 
@@ -21,17 +22,34 @@ function hash01(i) {
   return x - Math.floor(x);
 }
 
-export function createView(track, { width, height }) {
-  const pal = track.scenery.palette;
+// biome base + the track's per-seed jitter (stored as absolute meadow-relative
+// values in scenery.palette; converted to deltas here) => varied looks within
+// one coherent biome
+function resolvePalette(track, spec) {
+  const b = BIOMES[spec.world.biome];
+  const j = track.scenery.palette;
+  return {
+    ...b,
+    grassHue: b.grassHue + (j.grassHue - 0.31),
+    grassLight: b.grassLight + (j.grassLight - 0.37),
+    skyHue: b.skyHue + (j.skyHue - 0.58),
+    asphaltLight: b.asphaltLight + (j.asphaltLight - 0.2),
+  };
+}
+
+export function createView(track, { width, height, spec = null }) {
+  spec = spec || makeSpec();
+  const pal = resolvePalette(track, spec);
   const scene = new THREE.Scene();
 
-  const skyColor = new THREE.Color().setHSL(pal.skyHue, 0.52, 0.74);
+  const skyColor = new THREE.Color().setHSL(pal.skyHue, pal.skySat, pal.skyLight);
   scene.background = skyColor;
-  scene.fog = new THREE.Fog(skyColor, 130, 400);
+  scene.fog = new THREE.Fog(skyColor, pal.fogNear, pal.fogFar);
 
-  const grass = new THREE.Color().setHSL(pal.grassHue, 0.45, pal.grassLight);
-  scene.add(new THREE.HemisphereLight(0xd8e8ff, grass.clone().multiplyScalar(0.6), 1.05));
-  const sun = new THREE.DirectionalLight(0xffffff, 1.5);
+  const grass = new THREE.Color().setHSL(pal.grassHue, pal.grassSat, pal.grassLight);
+  const hemiIntensity = 0.25 + 1.1 * pal.skyLight;
+  scene.add(new THREE.HemisphereLight(0xd8e8ff, grass.clone().multiplyScalar(0.6), hemiIntensity));
+  const sun = new THREE.DirectionalLight(0xffffff, pal.sunIntensity);
   sun.position.set(60, 100, 30);
   scene.add(sun);
 
@@ -40,8 +58,9 @@ export function createView(track, { width, height }) {
   buildWalls(scene, track);
   buildStartGantry(scene, track);
   const padRig = buildBoostPads(scene, track);
-  buildScenery(scene, track);
-  const carRig = buildCar(scene);
+  buildScenery(scene, track, pal);
+  const carRig = buildCar(scene, spec.vehicle.color);
+  const entityRig = buildEntities(scene, spec, track);
 
   // --- chase camera
   const camera = new THREE.PerspectiveCamera(62, width / height, 0.3, 600);
@@ -64,6 +83,11 @@ export function createView(track, { width, height }) {
       const s = 1 + 0.25 * Math.sin(world.frame * 2.1);
       carRig.flame.scale.set(s, 1, 1);
     }
+    // death/invulnerability blink (deterministic: driven by frame counter)
+    const blinking = (world.respawnSub || 0) > 0 || (world.invulnSub || 0) > 0;
+    carRig.group.visible = !blinking || world.frame % 6 < 3;
+
+    updateEntities(entityRig, world);
 
     // boost pads dim while on cooldown
     for (let i = 0; i < padRig.meshes.length; i++) {
@@ -199,16 +223,17 @@ function buildTrackSurface(scene, track, pal) {
   scene.add(new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true })));
 
   const white = new THREE.Color(0xe8e8ea);
+  const edge = new THREE.Color(pal.edgeColor);
   const unlit = () => new THREE.MeshBasicMaterial({ vertexColors: true });
 
-  // edge lines
+  // edge lines (emissive-looking accent color on night/lava biomes)
   for (const side of [1, -1]) {
     const g = ribbonGeometry(
       track,
       (i) => side * (track.halfWidth[i] - 0.35),
       (i) => side * (track.halfWidth[i] - 0.75),
       0.02,
-      () => white,
+      () => edge,
     );
     scene.add(new THREE.Mesh(g, unlit()));
   }
@@ -366,39 +391,64 @@ function buildBoostPads(scene, track) {
   return { meshes, onMat, offMat };
 }
 
-function buildScenery(scene, track) {
-  const { trees, rocks, towers } = track.scenery;
+function buildScenery(scene, track, pal) {
+  const density = pal.scatterDensity;
+  const trees = track.scenery.trees.slice(0, Math.floor(track.scenery.trees.length * density));
+  const rocks = track.scenery.rocks.slice(0, Math.floor(track.scenery.rocks.length * density));
+  const { towers } = track.scenery;
   const tmp = new THREE.Object3D();
   const col = new THREE.Color();
 
   if (trees.length > 0) {
-    const canopyGeo = new THREE.ConeGeometry(1.6, 3.6, 7);
+    // biome flora: pine cones, cactus columns, or bare rock spires
+    const kind = pal.treeKind;
+    const canopyGeo =
+      kind === 'cactus'
+        ? new THREE.CylinderGeometry(0.55, 0.65, 3.4, 7)
+        : kind === 'rockspire'
+          ? new THREE.ConeGeometry(1.2, 5.2, 6)
+          : new THREE.ConeGeometry(1.6, 3.6, 7);
+    const canopyY = kind === 'cactus' ? 1.7 : kind === 'rockspire' ? 2.6 : 3.4;
+    const hasTrunk = kind === 'pine';
+    const colorAt = (t, c) => {
+      if (kind === 'cactus') c.setHSL(0.33 + 0.06 * t.hue, 0.45, 0.3 + 0.1 * t.hue);
+      else if (kind === 'rockspire') c.setHSL(0.02 + 0.04 * t.hue, 0.25, 0.18 + 0.14 * t.hue);
+      else c.setHSL(0.29 + 0.1 * t.hue, 0.5, 0.28 + 0.12 * t.hue);
+    };
     const trunkGeo = new THREE.CylinderGeometry(0.28, 0.36, 1.6, 5);
     const canopy = new THREE.InstancedMesh(
       canopyGeo,
       new THREE.MeshLambertMaterial({ color: 0xffffff }),
       trees.length,
     );
-    const trunk = new THREE.InstancedMesh(
-      trunkGeo,
-      new THREE.MeshLambertMaterial({ color: 0x6b4a2a }),
-      trees.length,
-    );
+    const trunk = hasTrunk
+      ? new THREE.InstancedMesh(
+          trunkGeo,
+          new THREE.MeshLambertMaterial({ color: 0x6b4a2a }),
+          trees.length,
+        )
+      : null;
     trees.forEach((t, i) => {
-      tmp.position.set(t.x, 1.6 * t.scale + 1.8 * t.scale, t.y);
+      tmp.position.set(t.x, canopyY * t.scale, t.y);
       tmp.rotation.set(0, t.rot, 0);
       tmp.scale.setScalar(t.scale);
       tmp.updateMatrix();
       canopy.setMatrixAt(i, tmp.matrix);
-      col.setHSL(0.29 + 0.1 * t.hue, 0.5, 0.28 + 0.12 * t.hue);
+      colorAt(t, col);
       canopy.setColorAt(i, col);
-      tmp.position.set(t.x, 0.8 * t.scale, t.y);
-      tmp.updateMatrix();
-      trunk.setMatrixAt(i, tmp.matrix);
+      if (trunk) {
+        tmp.position.set(t.x, 0.8 * t.scale, t.y);
+        tmp.updateMatrix();
+        trunk.setMatrixAt(i, tmp.matrix);
+      }
     });
     canopy.instanceMatrix.needsUpdate = true;
     if (canopy.instanceColor) canopy.instanceColor.needsUpdate = true;
-    scene.add(canopy, trunk);
+    scene.add(canopy);
+    if (trunk) {
+      trunk.instanceMatrix.needsUpdate = true;
+      scene.add(trunk);
+    }
   }
 
   if (rocks.length > 0) {
@@ -435,12 +485,139 @@ function buildScenery(scene, track) {
   }
 }
 
-function buildCar(scene) {
+// Meshes for monsters/projectiles/pickups. Monster mesh order matches
+// EntitySystem's spawn order (spec groups in sequence), so index == id.
+function buildEntities(scene, spec, track) {
+  const rig = { monsters: [], projectiles: [], pickups: [], projGeo: null };
+
+  for (const group of spec.entities.monsters) {
+    for (let i = 0; i < group.count; i++) {
+      const g = new THREE.Group();
+      const scale = group.scale || 1;
+      let baseColor;
+      if (group.type === 'chaser') {
+        baseColor = group.color !== undefined ? group.color : 0x8a2be2;
+        const mat = new THREE.MeshLambertMaterial({ color: baseColor });
+        const body = new THREE.Mesh(new THREE.IcosahedronGeometry(1.6 * scale, 0), mat);
+        body.position.y = 1.1 * scale;
+        g.add(body);
+        const eye = new THREE.Mesh(
+          new THREE.SphereGeometry(0.35 * scale, 8, 6),
+          new THREE.MeshBasicMaterial({ color: 0xfff23d }),
+        );
+        eye.position.set(1.2 * scale, 1.4 * scale, 0);
+        g.add(eye);
+        rig.monsters.push({ group: g, mat, baseColor });
+      } else if (group.type === 'patroller') {
+        baseColor = group.color !== undefined ? group.color : 0x1fa34a;
+        const mat = new THREE.MeshLambertMaterial({ color: baseColor });
+        const body = new THREE.Mesh(new THREE.BoxGeometry(2.6 * scale, 1.4 * scale, 2.0 * scale), mat);
+        body.position.y = 0.9 * scale;
+        g.add(body);
+        for (const z of [-0.5, 0.5]) {
+          const eye = new THREE.Mesh(
+            new THREE.SphereGeometry(0.22 * scale, 8, 6),
+            new THREE.MeshBasicMaterial({ color: 0xffffff }),
+          );
+          eye.position.set(1.3 * scale, 1.2 * scale, z * scale);
+          g.add(eye);
+        }
+        rig.monsters.push({ group: g, mat, baseColor });
+      } else {
+        // turret
+        baseColor = group.color !== undefined ? group.color : 0xb8443c;
+        const mat = new THREE.MeshLambertMaterial({ color: baseColor });
+        const base = new THREE.Mesh(new THREE.CylinderGeometry(1.7 * scale, 2.0 * scale, 1.5 * scale, 10), mat);
+        base.position.y = 0.75 * scale;
+        g.add(base);
+        const barrel = new THREE.Mesh(
+          new THREE.BoxGeometry(2.4 * scale, 0.4 * scale, 0.4 * scale),
+          new THREE.MeshLambertMaterial({ color: 0x2b2b31 }),
+        );
+        barrel.position.set(1.0 * scale, 1.5 * scale, 0);
+        g.add(barrel);
+        rig.monsters.push({ group: g, mat, baseColor });
+      }
+      scene.add(g);
+    }
+  }
+
+  // projectile pool (player + hostile share it; color set per frame)
+  rig.projGeo = new THREE.SphereGeometry(0.32, 8, 6);
+  for (let i = 0; i < 96; i++) {
+    const m = new THREE.Mesh(rig.projGeo, new THREE.MeshBasicMaterial({ color: 0x37e0ff }));
+    m.visible = false;
+    scene.add(m);
+    rig.projectiles.push(m);
+  }
+
+  for (const group of spec.entities.pickups) {
+    for (let i = 0; i < group.count; i++) {
+      const g = new THREE.Group();
+      if (group.kind === 'health') {
+        const mat = new THREE.MeshBasicMaterial({ color: 0x2ee65f });
+        const a = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.5, 0.5), mat);
+        const b = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 1.5), mat);
+        a.position.y = b.position.y = 0.9;
+        g.add(a, b);
+      } else {
+        const m = new THREE.Mesh(
+          new THREE.BoxGeometry(0.9, 0.9, 0.9),
+          new THREE.MeshBasicMaterial({ color: 0xffd11a }),
+        );
+        m.position.y = 0.9;
+        g.add(m);
+      }
+      scene.add(g);
+      rig.pickups.push(g);
+    }
+  }
+  return rig;
+}
+
+function updateEntities(rig, world) {
+  const ents = world.entities;
+  if (!ents) return;
+
+  for (let i = 0; i < rig.monsters.length && i < ents.monsters.length; i++) {
+    const m = ents.monsters[i];
+    const r = rig.monsters[i];
+    r.group.visible = m.alive;
+    if (!m.alive) continue;
+    r.group.position.set(m.x, 0, m.y);
+    r.group.rotation.y = -m.heading;
+    if (m.type === 'chaser') {
+      // deterministic bob keyed to the frame clock
+      r.group.position.y = 0.15 * Math.sin(world.frame * 0.35 + m.phase);
+    }
+    r.mat.color.setHex(m.hitFlash > 0 ? 0xffffff : r.baseColor);
+  }
+
+  let pi = 0;
+  for (const p of ents.projectiles) {
+    if (!p.alive || pi >= rig.projectiles.length) continue;
+    const mesh = rig.projectiles[pi++];
+    mesh.visible = true;
+    mesh.position.set(p.x, 1.0, p.y);
+    mesh.material.color.setHex(p.hostile ? 0xff5040 : 0x37e0ff);
+  }
+  for (; pi < rig.projectiles.length; pi++) rig.projectiles[pi].visible = false;
+
+  for (let i = 0; i < rig.pickups.length && i < ents.pickups.length; i++) {
+    const pk = ents.pickups[i];
+    const g = rig.pickups[i];
+    g.visible = pk.cooldown <= 0;
+    g.position.set(pk.x, 0, pk.y);
+    g.rotation.y = world.frame * 0.08;
+  }
+}
+
+function buildCar(scene, color = 0xff6a00) {
   const group = new THREE.Group();
   const body = new THREE.Group();
   group.add(body);
 
-  const paint = new THREE.MeshLambertMaterial({ color: 0xff6a00 });
+  const paint = new THREE.MeshLambertMaterial({ color });
   const dark = new THREE.MeshLambertMaterial({ color: 0x1c1e24 });
 
   const chassis = new THREE.Mesh(new THREE.BoxGeometry(4.0, 0.55, 1.85), paint);

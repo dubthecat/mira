@@ -10,8 +10,9 @@
 import { wrapAngle, clamp } from './rng.js';
 
 export class BotDriver {
-  constructor(track, seedRng) {
+  constructor(track, seedRng, spec = null) {
     this.track = track;
+    this.spec = spec;
     this.rng = seedRng.fork('bot');
     const r = () => this.rng.next();
 
@@ -27,6 +28,7 @@ export class BotDriver {
       driftiness: r() * r(), // handbrake appetite in hard corners
       epsBurst: 0.002 + 0.006 * r(), // per-frame prob of a random-action burst
       offsetSigma: 1.4 + 1.6 * r(), // racing-line wander (m)
+      trigger: 0.35 + 0.55 * r(), // per-frame prob of firing on a lined-up monster
     };
 
     this.steerState = 0; // -1, 0, +1 with hysteresis
@@ -38,8 +40,10 @@ export class BotDriver {
     this.recoverSteer = 1;
   }
 
-  // Called once per 20 Hz action frame. q = track projection of the car.
-  decide(car, q) {
+  // Called once per 20 Hz action frame. q = track projection of the car;
+  // world (optional) exposes entities + weapon state for combat decisions.
+  decide(car, q, world = null) {
+    const armed = !!(world && world.spec.weapon.enabled);
     const p = this.p;
     const t = this.track;
     const rng = this.rng;
@@ -89,6 +93,8 @@ export class BotDriver {
         D: rng.bool(0.35),
         Space: rng.bool(0.25),
         LShiftKey: rng.bool(0.2),
+        F: armed ? rng.bool(0.3) : false, // rng draw only when armed: keeps
+        // weaponless specs stream-identical to the pre-weapon engine
       });
       this.burstFrames--;
       return { ...this.burstKeys };
@@ -136,7 +142,23 @@ export class BotDriver {
     const LShiftKey =
       straight && car.boost > 30 && u > 0.55 * p.vMax && rng.next() < p.boostiness;
 
-    return keysFrom({ W, S, A: this.steerState > 0, D: this.steerState < 0, Space, LShiftKey });
+    // --- fire when a living monster is roughly down the barrel
+    let F = false;
+    if (armed && world.ammo > 0) {
+      for (const m of world.entities.monsters) {
+        if (!m.alive) continue;
+        const dx = m.x - car.x;
+        const dy = m.y - car.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 > 60 * 60) continue;
+        if (Math.abs(wrapAngle(Math.atan2(dy, dx) - car.heading)) < 0.22) {
+          F = rng.next() < p.trigger; // draw only on an actual firing solution
+          break;
+        }
+      }
+    }
+
+    return keysFrom({ W, S, A: this.steerState > 0, D: this.steerState < 0, Space, LShiftKey, F });
   }
 }
 
@@ -148,5 +170,6 @@ function keysFrom(partial) {
     D: !!partial.D,
     Space: !!partial.Space,
     LShiftKey: !!partial.LShiftKey,
+    F: !!partial.F,
   };
 }

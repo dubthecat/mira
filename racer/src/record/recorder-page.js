@@ -3,23 +3,34 @@
 // Frame/action alignment follows the dataset contract exactly: the pixels
 // captured for frame t show the state BEFORE action t; the keys recorded on
 // action line t are what the bot held while stepping to frame t+1. Physics
-// line t describes the same state as frame t's pixels.
+// line t describes the same state as frame t's pixels. The HUD is rendered
+// into the captured frames — UI is part of what the world model learns.
 
 import * as THREE from 'three';
-import { World, FPS, ACTION_KEYS } from '../sim/world.js';
+import { World, FPS } from '../sim/world.js';
 import { createView } from '../render/scene.js';
+import { createHud } from '../render/hud.js';
+import { makeSpec } from '../spec/schema.js';
 
 let world = null;
 let view = null;
+let hud = null;
 let renderer = null;
 
+function renderFrame() {
+  renderer.render(view.scene, view.camera);
+  hud.render(renderer, world);
+}
+
 window.__init = (config) => {
+  if (hud) hud.dispose();
   if (view) view.dispose();
   if (renderer) {
     renderer.dispose();
     renderer.domElement.remove();
   }
-  world = new World(config.seed >>> 0);
+  const spec = makeSpec(config.spec || {});
+  world = new World(config.seed >>> 0, spec);
   renderer = new THREE.WebGLRenderer({
     antialias: config.antialias !== false,
     preserveDrawingBuffer: true,
@@ -28,7 +39,8 @@ window.__init = (config) => {
   renderer.setPixelRatio(1);
   renderer.setSize(config.width, config.height);
   document.body.appendChild(renderer.domElement);
-  view = createView(world.track, { width: config.width, height: config.height });
+  view = createView(world.track, { width: config.width, height: config.height, spec });
+  hud = createHud(spec, { width: config.width, height: config.height });
 
   // unrecorded warmup for varied starting states (speed, mid-corner, ...)
   for (let i = 0; i < (config.warmupFrames || 0); i++) world.stepFrame();
@@ -37,12 +49,13 @@ window.__init = (config) => {
 
   // render frame 0 (camera initializes exactly on target — no settle drift)
   view.update(world, 1 / FPS);
-  renderer.render(view.scene, view.camera);
+  renderFrame();
 
   return {
     seed: world.seed,
     trackLength: Math.round(world.track.length * 100) / 100,
-    actionKeys: ACTION_KEYS,
+    actionKeys: world.actionKeys,
+    specName: spec.name,
   };
 };
 
@@ -57,10 +70,10 @@ window.__stepBatch = (n) => {
     physics.push(world.snapshot());
     // apply action K_t -> S_{t+1}
     const { keys } = world.stepFrame();
-    actions.push(ACTION_KEYS.filter((k) => keys[k]));
+    actions.push(world.actionKeys.filter((k) => keys[k]));
     // render S_{t+1} for the next iteration/batch
     view.update(world, 1 / FPS);
-    renderer.render(view.scene, view.camera);
+    renderFrame();
   }
   return { frames, actions, physics };
 };
@@ -70,6 +83,7 @@ window.__episodeMeta = () => ({
   frames: world.frame,
   events: world.events,
   laps: world.lap,
+  score: world.score,
   progress: Math.round(world.progress),
   trackLength: Math.round(world.track.length * 100) / 100,
 });

@@ -30,23 +30,23 @@ function catmullRom(p0, p1, p2, p3, t) {
   };
 }
 
-export function buildTrack(seedRng) {
+export function buildTrack(seedRng, opts = {}) {
   // Candidate tracks that violate geometric sanity (hairpins tighter than the
   // road is wide, or two sections of road overlapping in space) are rejected
   // and regenerated from a deterministically derived stream — same seed, same
   // final track, always.
   for (let attempt = 0; ; attempt++) {
     const rng = seedRng.fork(attempt === 0 ? 'track' : `track-retry${attempt}`);
-    const track = generateCandidate(rng);
+    const track = generateCandidate(rng, opts);
     if (track !== null) return track;
     if (attempt > 60) throw new Error('track generation failed to converge');
   }
 }
 
-function generateCandidate(rng) {
+function generateCandidate(rng, { radiusScale = 1, widthScale = 1, boostPads = true } = {}) {
   // --- control polygon: sorted angles + bounded radius jitter => simple polygon
   const K = rng.int(9, 13);
-  const baseR = rng.range(85, 140);
+  const baseR = rng.range(85, 140) * radiusScale;
   const ctrl = [];
   // half the tracks run clockwise (mirror), so left/right turns are balanced
   // across the dataset
@@ -125,7 +125,7 @@ function generateCandidate(rng) {
 
   // --- half-width: gentle seeded modulation along s, then clamped against
   // local curvature so the inner edge never folds (needs hw < 1/|kappa|)
-  const hw0 = rng.range(6.5, 9.0);
+  const hw0 = rng.range(6.5, 9.0) * widthScale;
   const hwPhase = rng.range(0, 2 * Math.PI);
   const hwLobes = rng.int(2, 4);
   const halfWidth = new Float64Array(N);
@@ -175,6 +175,8 @@ function generateCandidate(rng) {
   }
 
   // --- boost pads along the track at seeded intervals/lateral offsets
+  // (rng draws happen even when pads are disabled, so toggling boostPads
+  // does not shift every downstream stream)
   const pads = [];
   let sPad = rng.range(40, 80);
   while (sPad < total - 40) {
@@ -182,13 +184,15 @@ function generateCandidate(rng) {
     const lat = rng.range(-1, 1) * Math.max(0, halfWidth[idx] - 2.8);
     const nx = -Math.sin(theta[idx]);
     const ny = Math.cos(theta[idx]);
-    pads.push({
-      s: idx * ds,
-      idx,
-      lateral: lat,
-      x: xs[idx] + nx * lat,
-      y: ys[idx] + ny * lat,
-    });
+    if (boostPads) {
+      pads.push({
+        s: idx * ds,
+        idx,
+        lateral: lat,
+        x: xs[idx] + nx * lat,
+        y: ys[idx] + ny * lat,
+      });
+    }
     sPad += rng.range(85, 130);
   }
 

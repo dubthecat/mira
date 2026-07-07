@@ -39,10 +39,28 @@ export const CAR = {
   wallTangentKeep: 0.88,
 };
 
+// Per-spec physics parameters: multipliers over the base tuning, so handling
+// presets survive future re-tuning of the defaults.
+export function carParamsFor(spec) {
+  const v = spec.vehicle;
+  return {
+    ...CAR,
+    uMax: CAR.uMax * v.topSpeedScale,
+    uMaxBoost: CAR.uMaxBoost * v.topSpeedScale,
+    aEngine: CAR.aEngine * v.accelScale,
+    aBoost: CAR.aBoost * v.boostScale,
+    gripLambda: CAR.gripLambda * v.gripScale,
+    gripMaxA: CAR.gripMaxA * v.gripScale,
+    driftLambda: CAR.driftLambda * v.gripScale,
+    driftMaxA: CAR.driftMaxA * v.gripScale,
+  };
+}
+
 export class Car {
-  constructor(track, startS = 6) {
+  constructor(track, startS = 6, params = CAR) {
     const p = track.sampleAt(startS);
     this.track = track;
+    this.p = params;
     this.x = p.x;
     this.y = p.y;
     this.heading = p.theta;
@@ -58,9 +76,10 @@ export class Car {
     this.u = 0; // forward speed (for telemetry)
   }
 
-  // keys: {W,S,A,D,Space,LShiftKey} booleans, held for this substep
+  // keys: {W,S,A,D,Space,LShiftKey,F} booleans, held for this substep
+  // (F is consumed by the world's weapon logic, not by the car)
   step(keys, dt) {
-    const c = CAR;
+    const c = this.p;
     this.wallImpact = 0;
 
     // --- steering integrates toward the commanded side
