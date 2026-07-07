@@ -69,6 +69,8 @@ export class EntitySystem {
           respawnAt: -1,
           hitFlash: 0,
           contactCd: 0,
+          hintIdx: -1, // filled by first nearest() (global scan once)
+          wallGap: 99,
           fireCooldown: this.rng.range(0.5, 2.0), // desync turret volleys
           // patroller endpoints: across the road at its s
           px0: q.x + nx * (q.halfWidth - 1.5),
@@ -165,6 +167,11 @@ export class EntitySystem {
         m.heading = wrapAngle(m.heading + clamp(wrapAngle(want - m.heading), -3.2 * dt, 3.2 * dt));
         m.x += Math.cos(m.heading) * speed * dt;
         m.y += Math.sin(m.heading) * speed * dt;
+        // track distance-to-wall so the renderer can hover chasers OVER the
+        // barrier instead of clipping through it
+        const q = this.track.nearest(m.x, m.y, m.hintIdx);
+        m.hintIdx = q.idx;
+        m.wallGap = Math.abs(Math.abs(q.lateral) - q.halfWidth);
       } else if (m.type === 'patroller') {
         // triangle-wave sweep between the two road edges
         const period = Math.hypot(m.px1 - m.px0, m.py1 - m.py0) / m.cfg.speed;

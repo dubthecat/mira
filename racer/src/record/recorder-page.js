@@ -55,6 +55,9 @@ window.__init = (config) => {
   view.update(world, 1 / FPS);
   renderFrame();
 
+  // test hook: pixel-level HUD verification reads world state + canvas together
+  window.__world = world;
+
   return {
     seed: world.seed,
     trackLength: Math.round(world.track.length * 100) / 100,

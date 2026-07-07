@@ -13,7 +13,7 @@
 //   visually observable, tightening the action->pixels association.
 
 import * as THREE from 'three';
-import { makeSpec, BIOMES } from '../spec/schema.js';
+import { makeSpec, BIOMES, WEAPON_KINDS } from '../spec/schema.js';
 
 const CAM = { back: 7.4, height: 3.1, lookAhead: 7.0, lookUp: 1.15, posLag: 7.0, fovLag: 4.0 };
 
@@ -83,9 +83,27 @@ export function createView(track, { width, height, spec = null }) {
       const s = 1 + 0.25 * Math.sin(world.frame * 2.1);
       carRig.flame.scale.set(s, 1, 1);
     }
-    // death/invulnerability blink (deterministic: driven by frame counter)
-    const blinking = (world.respawnSub || 0) > 0 || (world.invulnSub || 0) > 0;
+    // death blink only — non-fatal damage keeps the car visible (the white
+    // paint flash below carries that feedback; a vanishing car would teach
+    // the model that damage teleports the player)
+    const blinking = (world.respawnSub || 0) > 0;
     carRig.group.visible = !blinking || world.frame % 6 < 3;
+
+    // damage feedback: paint flashes white for the first ~3 frames of invuln
+    const invulnMax = (world.spec?.rules.contactInvulnFrames || 0) * 3;
+    const justHit = (world.invulnSub || 0) > invulnMax - 9 && (world.invulnSub || 0) > 0;
+    carRig.paintMat.color.setHex(justHit ? 0xffffff : carRig.paintColor);
+
+    // muzzle flash: visible for ~2 frames after each shot (fire cooldown is
+    // reset to its max on Fired, so "near max" == "just fired")
+    if (carRig.flashMesh) {
+      const w = world.spec.weapon;
+      const cdMax = w.enabled ? Math.round(60 / WEAPON_KINDS[w.kind].fireRate) : 0;
+      carRig.flashMesh.visible = w.enabled && (world.fireCooldownSub || 0) > cdMax - 6;
+      if (carRig.flashMesh.visible) {
+        carRig.flashMesh.scale.setScalar(1 + 0.4 * ((world.frame + 1) % 2));
+      }
+    }
 
     updateEntities(entityRig, world);
 
@@ -594,8 +612,10 @@ function updateEntities(rig, world) {
     r.group.position.set(m.x, 0, m.y);
     r.group.rotation.y = -m.heading;
     if (m.type === 'chaser') {
-      // deterministic bob keyed to the frame clock
-      r.group.position.y = 0.15 * Math.sin(world.frame * 0.35 + m.phase);
+      // deterministic bob keyed to the frame clock, plus a hover arc when
+      // crossing the wall line so they float over the barrier, not through it
+      const hover = Math.max(0, 1 - (m.wallGap ?? 99) / 2.2);
+      r.group.position.y = 0.15 * Math.sin(world.frame * 0.35 + m.phase) + 1.5 * hover;
     }
     r.mat.color.setHex(m.hitFlash > 0 ? 0xffffff : r.baseColor);
   }
@@ -751,6 +771,16 @@ function buildCar(scene, color = 0xff6a00, bodyStyle = 'sport') {
   flame.visible = false;
   group.add(flame);
 
+  // muzzle flash at the nose (weapon feedback; toggled from update())
+  // sits high enough to peek over the body from the chase camera
+  const flashMesh = new THREE.Mesh(
+    new THREE.SphereGeometry(0.42, 8, 6),
+    new THREE.MeshBasicMaterial({ color: 0xfff3a0 }),
+  );
+  flashMesh.position.set(cl / 2 + 0.75, 1.05, 0);
+  flashMesh.visible = false;
+  group.add(flashMesh);
+
   // fake blob shadow
   const shadowGeo = new THREE.CircleGeometry(2.3, 18);
   shadowGeo.rotateX(-Math.PI / 2);
@@ -762,5 +792,5 @@ function buildCar(scene, color = 0xff6a00, bodyStyle = 'sport') {
   group.add(shadow);
 
   scene.add(group);
-  return { group, body, wheels, frontPivots, brakeMat, flame };
+  return { group, body, wheels, frontPivots, brakeMat, flame, flashMesh, paintMat: paint, paintColor: color };
 }
