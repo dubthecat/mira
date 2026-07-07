@@ -46,6 +46,16 @@ exec > >(tee -a /workspace/logs/smoke.log) 2>&1
 echo "[smoke] $(date -u) starting on $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
 
 # --- deps -------------------------------------------------------------------
+# runpod images keep torch in a venv activated via bashrc, which non-login
+# `bash -c` shells skip — find a python that has torch before anything else
+for cand in python3 /opt/venv/bin/python3 /workspace/venv/bin/python3 /venv/bin/python3; do
+  if "$cand" -c "import torch" 2>/dev/null; then
+    export PATH="$(dirname "$(command -v "$cand" || echo "$cand")"):$PATH"
+    break
+  fi
+done
+python3 -c "import torch" || { echo "[smoke] FATAL: no torch-enabled python found"; exit 1; }
+
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq && apt-get install -y -qq ffmpeg git curl > /dev/null
 pip install -q -U huggingface_hub

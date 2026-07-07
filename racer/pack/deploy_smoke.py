@@ -52,7 +52,9 @@ def gql(key: str, query: str, variables: dict | None = None) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gpu", default="NVIDIA A100 80GB PCIe")
-    parser.add_argument("--image", default="pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel")
+    # runpod's own image: pre-cached on most community hosts (a generic
+    # dockerhub devel image once sat in "pulling" for an hour of billed time)
+    parser.add_argument("--image", default="runpod/pytorch:1.0.7-cu1281-torch280-ubuntu2404")
     parser.add_argument("--repo", default="WilliamBolduc/racer-world-model-v1")
     parser.add_argument("--run-name", default="smoke1")
     args = parser.parse_args()
