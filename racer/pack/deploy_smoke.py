@@ -38,7 +38,7 @@ def start_cmd() -> list[str]:
         "timeout 7200 bash /train_smoke.sh; "
         # belt-and-braces: terminate even if the script's own trap failed
         'curl -s -X DELETE "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID" '
-        '-H "Authorization: Bearer $RUNPOD_API_KEY"; '
+        '-H "Authorization: Bearer $RUNPOD_TERMINATE_KEY"; '
         "sleep 5"
     )
     return ["bash", "-c", boot]
@@ -94,7 +94,9 @@ def main() -> int:
             "HF_DATASET_REPO": args.repo,
             "GIT_REPO": "https://github.com/dubthecat/mira",
             "GIT_BRANCH": "racer-pipeline",
-            "RUNPOD_API_KEY": key,
+            # NOT "RUNPOD_API_KEY": RunPod injects its own pod-scoped key under
+            # that name (cannot delete pods), which would shadow ours
+            "RUNPOD_TERMINATE_KEY": key,
             "RUN_NAME": args.run_name,
         },
         "dockerEntrypoint": [],

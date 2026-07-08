@@ -10,7 +10,9 @@
 #   HF_DATASET_REPO   - e.g. WilliamBolduc/racer-world-model-v1
 #   GIT_REPO          - e.g. https://github.com/dubthecat/mira (public)
 #   GIT_BRANCH        - e.g. racer-pipeline
-#   RUNPOD_API_KEY    - for self-termination (billing stops even on failure)
+#   RUNPOD_TERMINATE_KEY - ACCOUNT api key for self-termination. Must NOT be
+#                     named RUNPOD_API_KEY: RunPod injects its own pod-scoped
+#                     key under that name, which can't delete pods
 #   RUNPOD_POD_ID     - injected by RunPod
 #   RUN_NAME          - e.g. smoke1
 set -uo pipefail
@@ -31,10 +33,20 @@ for f in glob.glob("/workspace/logs/*"):
     except Exception as e:
         print("upload failed:", f, e)
 PYEOF
-  if [ -n "${RUNPOD_API_KEY:-}" ] && [ -n "${RUNPOD_POD_ID:-}" ]; then
+  if [ -n "${RUNPOD_TERMINATE_KEY:-}" ] && [ -n "${RUNPOD_POD_ID:-}" ]; then
     # documented terminate: DELETE /v1/pods/{id} (docs.runpod.io/pods/manage-pods)
-    curl -s -X DELETE "https://rest.runpod.io/v1/pods/${RUNPOD_POD_ID}" \
-      -H "Authorization: Bearer ${RUNPOD_API_KEY}" || true
+    resp=$(curl -s -w " http=%{http_code}" -X DELETE "https://rest.runpod.io/v1/pods/${RUNPOD_POD_ID}" \
+      -H "Authorization: Bearer ${RUNPOD_TERMINATE_KEY}" || true)
+    echo "[smoke] terminate response: $resp"
+    export TERM_RESP="$resp"
+    python3 - << 'PYEOF2' || true
+import os, io
+from huggingface_hub import HfApi
+HfApi(token=os.environ["HF_TOKEN"]).upload_file(
+    path_or_fileobj=io.BytesIO(os.environ.get("TERM_RESP", "?").encode()),
+    path_in_repo=f"runs/{os.environ.get('RUN_NAME','smoke')}/TERMINATE.txt",
+    repo_id=os.environ["HF_DATASET_REPO"], repo_type="dataset")
+PYEOF2
   fi
   exit "$code"
 }
@@ -83,7 +95,9 @@ snapshot_download(os.environ["HF_DATASET_REPO"], repo_type="dataset",
                   allow_patterns=["train/*", "test/*"])
 PYEOF
 cd mira
-pip install -q -e '.[train,decode,hf]'
+# torchcodec pinned: newer wheels want CUDA 13 (libnvrtc.so.13) but the
+# image ships torch 2.8 / CUDA 12.8 — 0.7.0 is the repo's pinned pairing
+pip install -q -e '.[train,hf]' 'torchcodec==0.7.0'
 python3 -c "import torch, torchcodec; print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"
 
 # --- random-init DINOv3 backbone under the expected filename ----------------
