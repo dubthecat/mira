@@ -67,14 +67,17 @@ window.__init = (config) => {
   };
 };
 
-// Record n frames; returns capture data for each.
-window.__stepBatch = (n) => {
+// Record n frames; returns capture data for each. fmt: 'png' (lossless into
+// the H.264 encode) or 'jpeg' (q0.92 — faster capture, negligible extra loss
+// under CRF-18 H.264; the recorder exposes it as --jpeg).
+window.__stepBatch = (n, fmt = 'png') => {
   const frames = [];
   const actions = [];
   const physics = [];
+  const mime = fmt === 'jpeg' ? 'image/jpeg' : 'image/png';
   for (let i = 0; i < n; i++) {
     // capture state S_t (already rendered), physics of the same instant
-    frames.push(renderer.domElement.toDataURL('image/png'));
+    frames.push(renderer.domElement.toDataURL(mime, 0.92));
     physics.push(world.snapshot());
     // apply action K_t -> S_{t+1}
     const { keys } = world.stepFrame();

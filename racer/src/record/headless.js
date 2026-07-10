@@ -34,11 +34,16 @@ function parseArgs(argv) {
     chrome: '',
     spec: '', // path to a GameSpec json (from forge/compile); empty = classic racing
     antialias: true,
+    jpeg: false, // capture JPEG q0.92 instead of PNG (faster; negligible loss under CRF-18)
   };
   for (let i = 2; i < argv.length; i++) {
     const k = argv[i].replace(/^--/, '');
     if (k === 'no-antialias') {
       a.antialias = false;
+      continue;
+    }
+    if (k === 'jpeg') {
+      a.jpeg = true;
       continue;
     }
     const v = argv[++i];
@@ -131,9 +136,10 @@ async function recordEpisode(page, args, seed, matchId, spec) {
   try {
     for (let f = 0; f < args.frames; f += args.batch) {
       const n = Math.min(args.batch, args.frames - f);
-      const batch = await page.evaluate((k) => window.__stepBatch(k), n);
+      const batch = await page.evaluate((k, fmt) => window.__stepBatch(k, fmt), n, args.jpeg ? 'jpeg' : 'png');
       for (let i = 0; i < n; i++) {
-        pngs.push(Buffer.from(batch.frames[i].slice('data:image/png;base64,'.length), 'base64'));
+        const dataUrl = batch.frames[i];
+        pngs.push(Buffer.from(dataUrl.slice(dataUrl.indexOf(',') + 1), 'base64'));
         actionLines.push(JSON.stringify({ keys: batch.actions[i] }));
         physicsLines.push(JSON.stringify(batch.physics[i]));
         if (pngs.length === args.chunk) {
