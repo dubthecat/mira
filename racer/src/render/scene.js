@@ -60,6 +60,7 @@ export function createView(world, { width, height }) {
   const skyColor = new THREE.Color().setHSL(pal.skyHue, pal.skySat, pal.skyLight);
   scene.background = skyColor;
   scene.fog = new THREE.Fog(skyColor, pal.fogNear, pal.fogFar);
+  buildSkyDome(scene, pal, skyColor);
 
   const grass = new THREE.Color().setHSL(pal.grassHue, pal.grassSat, pal.grassLight);
   const hemiIntensity = 0.25 + 1.1 * pal.skyLight;
@@ -87,6 +88,8 @@ export function createView(world, { width, height }) {
     carRig = buildCar(scene, spec.vehicle.color, spec.vehicle.body);
   }
   const entityRig = buildEntities(scene, spec, track);
+  const particles = buildParticles(scene);
+  let evCursor = 0; // world.events consumed so far (for event-driven bursts)
 
   // --- chase camera
   const camera = new THREE.PerspectiveCamera(62, width / height, 0.3, 600);
@@ -132,6 +135,33 @@ export function createView(world, { width, height }) {
     }
 
     updateEntities(entityRig, world);
+
+    // --- particles: event bursts + state emitters (deterministic under the
+    // recorder's fixed dt; purely cosmetic at play time)
+    for (; evCursor < world.events.length; evCursor++) {
+      const e = world.events[evCursor];
+      if (e.name === 'MonsterKilled') {
+        const m = world.entities.monsters[e.data.id];
+        if (m) particles.burst(m.x, 1.2, m.y, 14, m.cfg.color, 9, 0.7);
+      } else if (e.name === 'CarDamaged') {
+        particles.burst(c.x, 1.0, c.y, 8, 0xff5533, 7, 0.45);
+      } else if (e.name === 'Fired') {
+        const fx2 = Math.cos(c.heading);
+        const fy2 = Math.sin(c.heading);
+        particles.burst(c.x + fx2 * 2.6, 1.1, c.y + fy2 * 2.6, 3, 0xd8d8cf, 2.5, 0.35);
+      }
+    }
+    if (c.drifting && Math.abs(c.u) > 8 && world.frame % 2 === 0) {
+      const bx = c.x - Math.cos(c.heading) * 1.6;
+      const by = c.y - Math.sin(c.heading) * 1.6;
+      particles.puff(bx, 0.3, by, 0x9a938a, 0.55);
+    }
+    if (c.boosting) {
+      const bx = c.x - Math.cos(c.heading) * 2.8;
+      const by = c.y - Math.sin(c.heading) * 2.8;
+      particles.puff(bx, 0.55, by, 0xffa428, 0.3);
+    }
+    particles.update(dt);
 
     // boost pads dim while on cooldown (circuit only)
     for (let i = 0; i < padRig.meshes.length; i++) {
@@ -186,6 +216,137 @@ export function createView(world, { width, height }) {
 }
 
 // ---------------------------------------------------------------------------
+
+// Gradient sky: inverted vertex-colored dome (zenith darker/deeper than the
+// horizon, which melts into the fog color) + a sun disc billboard aligned
+// with the directional light. Far richer horizon than a flat clear color.
+function buildSkyDome(scene, pal, skyColor) {
+  const geo = new THREE.SphereGeometry(520, 20, 12);
+  const pos = geo.getAttribute('position');
+  const colors = new Float32Array(pos.count * 3);
+  const zenith = new THREE.Color().setHSL(
+    pal.skyHue,
+    Math.min(1, pal.skySat * 1.15),
+    Math.max(0.03, pal.skyLight * 0.62),
+  );
+  const c = new THREE.Color();
+  for (let i = 0; i < pos.count; i++) {
+    const t = Math.max(0, Math.min(1, pos.getY(i) / 520)); // 0 horizon, 1 zenith
+    c.copy(skyColor).lerp(zenith, Math.pow(t, 0.8));
+    colors[i * 3] = c.r;
+    colors[i * 3 + 1] = c.g;
+    colors[i * 3 + 2] = c.b;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  const dome = new THREE.Mesh(
+    geo,
+    new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false }),
+  );
+  dome.renderOrder = -2;
+  scene.add(dome);
+
+  // sun disc along the light direction (60,100,30), pushed to the dome
+  const sunDir = new THREE.Vector3(60, 100, 30).normalize();
+  const disc = new THREE.Mesh(
+    new THREE.CircleGeometry(26, 20),
+    new THREE.MeshBasicMaterial({
+      color: pal.sunIntensity < 0.6 ? 0xd9e6ff : 0xfff2c4, // moon at night
+      fog: false,
+      depthWrite: false,
+      transparent: true,
+      opacity: pal.sunIntensity < 0.6 ? 0.7 : 0.95,
+    }),
+  );
+  disc.position.copy(sunDir.multiplyScalar(495));
+  disc.lookAt(0, 0, 0);
+  disc.renderOrder = -1;
+  scene.add(disc);
+}
+
+// Pooled particle system: one THREE.Points draw call, fixed pool, ring-buffer
+// spawning. Fade is faked by lerping particle color toward the fog color
+// (PointsMaterial has no per-point alpha without custom shaders — and shaders
+// are what we avoid under SwiftShader).
+function buildParticles(scene, poolSize = 160) {
+  const positions = new Float32Array(poolSize * 3);
+  const colors = new Float32Array(poolSize * 3);
+  const parts = [];
+  for (let i = 0; i < poolSize; i++) {
+    positions[i * 3 + 1] = -100; // parked underground
+    parts.push({ vx: 0, vy: 0, vz: 0, life: 0, ttl: 1, r: 0, g: 0, b: 0 });
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  const points = new THREE.Points(
+    geo,
+    new THREE.PointsMaterial({ vertexColors: true, size: 0.6, sizeAttenuation: true, depthWrite: false }),
+  );
+  points.frustumCulled = false;
+  scene.add(points);
+
+  let cursor = 0;
+  const tmp = new THREE.Color();
+  const fog = new THREE.Color();
+
+  function spawn(x, y, z, vx, vy, vz, ttl, color) {
+    const i = cursor;
+    cursor = (cursor + 1) % poolSize;
+    positions[i * 3] = x;
+    positions[i * 3 + 1] = y;
+    positions[i * 3 + 2] = z;
+    tmp.setHex(color);
+    colors[i * 3] = tmp.r;
+    colors[i * 3 + 1] = tmp.g;
+    colors[i * 3 + 2] = tmp.b;
+    const p = parts[i];
+    p.vx = vx;
+    p.vy = vy;
+    p.vz = vz;
+    p.life = ttl;
+    p.ttl = ttl;
+    p.r = tmp.r;
+    p.g = tmp.g;
+    p.b = tmp.b;
+  }
+
+  return {
+    // radial explosion at a sim point (y = height)
+    burst(x, y, z, n, color, speed, ttl) {
+      for (let k = 0; k < n; k++) {
+        const a = (k / n) * Math.PI * 2;
+        const up = 2 + 3 * hash01(k * 17 + n);
+        spawn(x, y, z, Math.cos(a) * speed, up, Math.sin(a) * speed, ttl * (0.6 + 0.4 * hash01(k + 3)), color);
+      }
+    },
+    // single soft puff (dust/smoke)
+    puff(x, y, z, color, ttl) {
+      spawn(x, y, z, 0, 1.6, 0, ttl, color);
+    },
+    update(dt) {
+      fog.copy(scene.fog ? scene.fog.color : tmp.setHex(0x000000));
+      for (let i = 0; i < poolSize; i++) {
+        const p = parts[i];
+        if (p.life <= 0) continue;
+        p.life -= dt;
+        positions[i * 3] += p.vx * dt;
+        positions[i * 3 + 1] += p.vy * dt;
+        positions[i * 3 + 2] += p.vz * dt;
+        p.vy -= 6 * dt; // light gravity
+        if (p.life <= 0) {
+          positions[i * 3 + 1] = -100;
+          continue;
+        }
+        const f = Math.max(0, p.life / p.ttl); // 1 -> 0
+        colors[i * 3] = fog.r + (p.r - fog.r) * f;
+        colors[i * 3 + 1] = fog.g + (p.g - fog.g) * f;
+        colors[i * 3 + 2] = fog.b + (p.b - fog.b) * f;
+      }
+      geo.getAttribute('position').needsUpdate = true;
+      geo.getAttribute('color').needsUpdate = true;
+    },
+  };
+}
 
 function buildGround(scene, track, grass) {
   const b = track.bounds;
@@ -572,6 +733,7 @@ function buildEntities(scene, spec, track) {
       } else {
         // turret
         baseColor = group.color !== undefined ? group.color : 0xb8443c;
+        // (turrets get their shadow below like everyone else)
         const mat = new THREE.MeshLambertMaterial({ color: baseColor });
         const base = new THREE.Mesh(new THREE.CylinderGeometry(1.7 * scale, 2.0 * scale, 1.5 * scale, 10), mat);
         base.position.y = 0.75 * scale;
@@ -584,6 +746,15 @@ function buildEntities(scene, spec, track) {
         g.add(barrel);
         rig.monsters.push({ group: g, mat, baseColor });
       }
+      // grounding blob shadow (same trick as the car's)
+      const shGeo = new THREE.CircleGeometry(1.7 * (group.scale || 1), 12);
+      shGeo.rotateX(-Math.PI / 2);
+      const sh = new THREE.Mesh(
+        shGeo,
+        new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.28 }),
+      );
+      sh.position.y = 0.02;
+      g.add(sh);
       scene.add(g);
     }
   }
@@ -725,6 +896,15 @@ function buildCar(scene, color = 0xff6a00, bodyStyle = 'sport') {
   const cabin = new THREE.Mesh(new THREE.BoxGeometry(bl, bh, bw), dark);
   cabin.position.set(bx, by, 0);
   body.add(cabin);
+
+  // two-tone racing stripe down the hood (darkened paint shade)
+  const stripeColor = new THREE.Color(color).multiplyScalar(0.5).getHex();
+  const stripe = new THREE.Mesh(
+    new THREE.BoxGeometry(cl * 0.92, 0.05, 0.5),
+    new THREE.MeshLambertMaterial({ color: stripeColor }),
+  );
+  stripe.position.set(0, cy + ch / 2 + 0.035, 0);
+  body.add(stripe);
 
   if (style.spoiler) {
     const spoiler = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.1, 2.0), dark);
