@@ -17,6 +17,11 @@ function runEpisode(spec, seed, frames) {
   let stall = 0;
   let maxStall = 0;
   let prevProgress = 0;
+  let prevX = w.car.x;
+  let prevY = w.car.y;
+  // the shooter archetype has no odometer (world.progress stays 0), so its
+  // stall detector watches raw avatar displacement instead
+  const stallByMotion = spec.archetype === 'shooter';
   const sig = [];
   for (let f = 0; f < frames; f++) {
     const { keys } = w.stepFrame();
@@ -29,10 +34,15 @@ function runEpisode(spec, seed, frames) {
         throw new Error(`NaN monster ${m.id} at frame ${f} (seed ${seed}, spec ${spec.name})`);
       }
     }
-    if (w.progress - prevProgress < 0.05 && w.respawnSub <= 0) stall++;
+    const moved = stallByMotion
+      ? Math.hypot(w.car.x - prevX, w.car.y - prevY)
+      : w.progress - prevProgress;
+    if (moved < 0.05 && w.respawnSub <= 0) stall++;
     else stall = 0;
     maxStall = Math.max(maxStall, stall);
     prevProgress = w.progress;
+    prevX = w.car.x;
+    prevY = w.car.y;
     if (f % 100 === 0) sig.push([w.car.x.toFixed(6), w.car.y.toFixed(6), w.score, w.health]);
   }
   for (const e of w.events) counts[e.name] = (counts[e.name] || 0) + 1;
@@ -80,7 +90,7 @@ for (const entry of battery) {
     for (const [k, v] of Object.entries(r.keyFrames)) agg.keyFrames[k] = (agg.keyFrames[k] || 0) + v;
     agg.meanSpeed += r.meanSpeed / SEEDS;
     agg.maxStall = Math.max(agg.maxStall, r.maxStall);
-    agg.laps += r.w.lap;
+    agg.laps += r.w.lap || 0; // trackless archetypes have no lap counter
   }
 
   if (agg && problems.length === 0) {
@@ -88,11 +98,25 @@ for (const entry of battery) {
     const check = (cond, msg) => {
       if (!cond) problems.push(msg);
     };
+    // count gates are calibrated as totals over SEEDS x 2400-frame episodes;
+    // scale for shorter runs (same pattern for laps, goals, waves, relics)
+    const scaled = (base) => Math.max(1, Math.floor(base * SEEDS * (FRAMES / 2400)));
     if (gates.minMeanSpeed) check(agg.meanSpeed >= gates.minMeanSpeed, `meanSpeed ${agg.meanSpeed.toFixed(1)} < ${gates.minMeanSpeed}`);
     if (gates.minLaps) {
-      // gates are calibrated for 2400-frame episodes; scale for shorter runs
-      const want = Math.max(1, Math.floor(gates.minLaps * SEEDS * (FRAMES / 2400)));
+      const want = scaled(gates.minLaps);
       check(agg.laps >= want, `laps ${agg.laps} < ${want}`);
+    }
+    if (gates.minGoalsTotal) {
+      const want = scaled(gates.minGoalsTotal);
+      check((c.GoalScored || 0) >= want, `GoalScored ${c.GoalScored || 0} < ${want}`);
+    }
+    if (gates.minWaves) {
+      const want = scaled(gates.minWaves);
+      check((c.WaveStarted || 0) >= want, `WaveStarted ${c.WaveStarted || 0} < ${want}`);
+    }
+    if (gates.minRelics) {
+      const want = scaled(gates.minRelics);
+      check((c.RelicCollected || 0) >= want, `RelicCollected ${c.RelicCollected || 0} < ${want}`);
     }
     if (gates.minFired) check((c.Fired || 0) >= gates.minFired, `Fired ${c.Fired || 0} < ${gates.minFired}`);
     if (gates.minKills) check((c.MonsterKilled || 0) >= gates.minKills, `kills ${c.MonsterKilled || 0} < ${gates.minKills}`);

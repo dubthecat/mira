@@ -19,6 +19,10 @@ const BLURBS = {
   'twilight-turrets': 'Dodge tracer fire at night.',
   'beetle-gauntlet-armed': 'Wide road, armed, guards everywhere.',
   'mixed-mayhem': 'Everything hostile at once, on lava.',
+  'car-soccer-derby': 'Rocket-car soccer, one rival, first to the ball wins.',
+  'arena-doom': 'On-foot arena survival against waves of chasers.',
+  'relic-quest': 'Open-world relic hunt past guards and turrets.',
+  'meadow-kickabout': 'Empty pitch, just you and the ball.',
 };
 
 function summarize(spec) {

@@ -177,7 +177,7 @@ export function validateSpec(spec) {
     if (!(p.count >= 0 && p.count <= 40)) fail(`pickup count out of range: ${p.count}`);
   }
   for (const el of spec.hud.elements) {
-    if (!['speed', 'boost', 'health', 'ammo', 'score', 'lap', 'minimap'].includes(el)) {
+    if (!['speed', 'boost', 'health', 'ammo', 'score', 'lap', 'minimap', 'match', 'objective', 'wave'].includes(el)) {
       fail(`unknown hud element '${el}'`);
     }
   }

@@ -25,7 +25,7 @@ export default function Landing() {
         <section className="section">
           <h2>Or play a pre-built game</h2>
           <p className="section-copy">
-            Twelve battle-tested genres from the engine&apos;s test battery — the same specs
+            Sixteen battle-tested genres from the engine&apos;s test battery — the same specs
             our pilot datasets were recorded with. Thumbnails are real recorded frames.
           </p>
           <GameGallery />

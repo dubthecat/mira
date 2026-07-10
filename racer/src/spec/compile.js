@@ -12,6 +12,14 @@ import { Rng, clamp } from '../sim/rng.js';
 // Keyword tables. Matching is per-token: the prompt is lowercased and split on
 // non-alphanumerics, so 'shooter' never triggers 'shoot' by substring.
 export const KEYWORDS = {
+  // archetype words (first mention wins; default circuit). 'arena' is handled
+  // separately in extract(): it only means shooter next to gun/shoot words,
+  // so 'arena race' stays a circuit. 'open world' (two tokens) likewise.
+  archetype: {
+    soccer: ['soccer', 'football', 'fifa', 'futbol'],
+    shooter: ['shooter', 'fps', 'gunfight', 'doom'],
+    adventure: ['adventure', 'quest', 'explore', 'exploration', 'openworld', 'mmo', 'rpg', 'zelda'],
+  },
   biome: {
     desert: ['desert', 'sand', 'sands', 'sandy', 'dune', 'dunes'],
     snow: ['snow', 'snowy', 'ice', 'icy', 'winter'],
@@ -23,7 +31,8 @@ export const KEYWORDS = {
   monsterType: {
     chaser: ['chase', 'chaser', 'chasers', 'chasing', 'wolf', 'wolves', 'zombie', 'zombies'],
     patroller: ['patrol', 'patrols', 'patrolling', 'patroller', 'patrollers', 'guard', 'guards', 'beetle', 'beetles'],
-    turret: ['turret', 'turrets', 'tower', 'towers', 'cannon', 'cannons', 'shooter', 'shooters'],
+    // singular 'shooter' is an archetype word now; plural still means turrets
+    turret: ['turret', 'turrets', 'tower', 'towers', 'cannon', 'cannons', 'shooters'],
   },
   weapon: {
     blaster: ['gun', 'guns', 'blaster', 'blasters', 'laser', 'lasers', 'shoot', 'shoots', 'shooting', 'weapon', 'weapons', 'cannon', 'cannons'],
@@ -57,7 +66,7 @@ export const KEYWORDS = {
 };
 
 // canonical hud element order so extraction order never leaks into the spec
-const HUD_ORDER = ['speed', 'boost', 'health', 'ammo', 'score', 'lap', 'minimap'];
+const HUD_ORDER = ['speed', 'boost', 'health', 'ammo', 'score', 'lap', 'match', 'objective', 'wave', 'minimap'];
 const CAR_COLORS = [0xff6a00, 0x2a7fff, 0xff2a5f, 0x27c95e, 0xffd11a, 0xb44cff, 0x00e5d0];
 const STOPWORDS = new Set([
   'a', 'an', 'the', 'with', 'and', 'or', 'of', 'in', 'on', 'at', 'to', 'for',
@@ -83,7 +92,36 @@ function extract(prompt) {
   const hasAny = (ws) => ws.some(has);
 
   const kw = { world: {}, vehicle: {}, entities: {}, weapon: {}, hud: {} };
-  const flags = { biome: false, grip: false, topSpeed: false, width: false, track: false };
+  const flags = { archetype: false, biome: false, grip: false, topSpeed: false, width: false, track: false };
+
+  // archetype: first-mentioned archetype word wins; default circuit. 'arena'
+  // alone stays circuit ('arena race') — it means shooter only when the
+  // prompt also carries a gun/shoot word; 'open world' is a two-token match.
+  let archetype = 'circuit';
+  {
+    const gunny = hasAny(KEYWORDS.weapon.blaster) || hasAny(KEYWORDS.weapon.spread);
+    scan: for (let i = 0; i < toks.length; i++) {
+      const t = toks[i];
+      for (const [arch, words] of Object.entries(KEYWORDS.archetype)) {
+        if (words.includes(t)) {
+          archetype = arch;
+          break scan;
+        }
+      }
+      if (t === 'open' && toks[i + 1] === 'world') {
+        archetype = 'adventure';
+        break;
+      }
+      if (t === 'arena' && gunny) {
+        archetype = 'shooter';
+        break;
+      }
+    }
+    if (archetype !== 'circuit') {
+      kw.archetype = archetype;
+      flags.archetype = true;
+    }
+  }
 
   // biome: first-mentioned biome word wins ('dark forest' -> night)
   outer: for (const t of toks) {
@@ -103,7 +141,7 @@ function extract(prompt) {
       if (words.includes(t) && !types.includes(type)) types.push(type);
     }
   }
-  const monstersOn = types.length > 0 || hasAny(KEYWORDS.monsterEnable);
+  let monstersOn = types.length > 0 || hasAny(KEYWORDS.monsterEnable);
   const isMonsterWord = (t) =>
     KEYWORDS.monsterEnable.includes(t) || Object.values(KEYWORDS.monsterType).some((ws) => ws.includes(t));
 
@@ -128,10 +166,52 @@ function extract(prompt) {
       .filter((m) => m.count > 0);
   }
 
-  // weapon: spread words are more specific, so they win over blaster words
+  // weapon: spread words are more specific, so they win over blaster words;
+  // the shooter archetype is ALWAYS armed (default blaster)
   const wantSpread = hasAny(KEYWORDS.weapon.spread);
-  const weaponOn = wantSpread || hasAny(KEYWORDS.weapon.blaster);
+  const weaponOn = wantSpread || hasAny(KEYWORDS.weapon.blaster) || archetype === 'shooter';
   if (weaponOn) kw.weapon = { enabled: true, kind: wantSpread ? 'spread' : 'blaster' };
+
+  // --- archetype-specific knobs -------------------------------------------
+  if (archetype === 'soccer') {
+    // opponents: '1v1'/'2v2' or a digit within 2 tokens of an opponent word
+    const oppWords = ['opponent', 'opponents', 'rival', 'rivals'];
+    for (let i = 0; i < toks.length; i++) {
+      const vs = /^([0-2])v[0-2]$/.exec(toks[i]);
+      if (vs) {
+        kw.soccer = { opponents: parseInt(vs[1], 10) };
+        break;
+      }
+      if (/^\d+$/.test(toks[i]) && (oppWords.includes(toks[i + 1]) || oppWords.includes(toks[i + 2]))) {
+        kw.soccer = { opponents: clamp(parseInt(toks[i], 10), 0, 2) };
+        break;
+      }
+    }
+  } else if (archetype === 'shooter') {
+    // arena survival needs targets: auto-spawn chasers when none were named
+    if (!monstersOn) {
+      kw.entities.monsters = [{ type: 'chaser', count: 12 }];
+      monstersOn = true;
+    }
+    // 'waves of N' -> waveSize
+    for (let i = 0; i < toks.length; i++) {
+      if (toks[i] !== 'wave' && toks[i] !== 'waves') continue;
+      const d = /^\d+$/.test(toks[i + 1] || '') ? toks[i + 1] : /^\d+$/.test(toks[i + 2] || '') ? toks[i + 2] : null;
+      if (d) {
+        kw.shooter = { waveSize: clamp(parseInt(d, 10), 1, 12) };
+        break;
+      }
+    }
+  } else if (archetype === 'adventure') {
+    // 'N relics' -> relic count
+    for (let i = 0; i < toks.length; i++) {
+      const rw = (t) => t === 'relic' || t === 'relics';
+      if (/^\d+$/.test(toks[i]) && (rw(toks[i + 1]) || rw(toks[i + 2]))) {
+        kw.adventure = { relics: clamp(parseInt(toks[i], 10), 2, 14) };
+        break;
+      }
+    }
+  }
 
   // handling
   if (hasAny(KEYWORDS.handling.drifty)) {
@@ -170,8 +250,13 @@ function extract(prompt) {
   }
 
   // hud + auto pickups: armed weapons need ammo readout/refills, monsters need
-  // health/score; an explicit 'no hud'/'clean' still keeps the world pickups
+  // health/score; an explicit 'no hud'/'clean' still keeps the world pickups.
+  // Each archetype contributes its own objective readout (match / wave /
+  // objective); 'lap' only exists on circuits.
   const wants = new Set(DEFAULT_SPEC.hud.elements);
+  if (archetype === 'soccer') wants.add('match');
+  else if (archetype === 'shooter') wants.add('score').add('wave');
+  else if (archetype === 'adventure') wants.add('score').add('objective');
   const pickups = [];
   if (monstersOn) {
     wants.add('health').add('score');
@@ -181,7 +266,7 @@ function extract(prompt) {
     wants.add('ammo');
     pickups.push({ kind: 'ammo', count: 4 });
   }
-  if (hasAny(KEYWORDS.hud.race)) wants.add('lap');
+  if (hasAny(KEYWORDS.hud.race) && archetype === 'circuit') wants.add('lap');
   if (hasAny(KEYWORDS.hud.minimap)) wants.add('minimap');
   if (pickups.length) kw.entities.pickups = pickups;
   const clean = hasAny(KEYWORDS.hud.clean) || text.includes(' no hud ');
@@ -190,9 +275,35 @@ function extract(prompt) {
   return { kw, flags };
 }
 
+// baseline a variety-rolled archetype needs to stay playable: shooters are
+// armed with wave targets, every archetype gets its objective readout ('lap'
+// is dropped off circuits). 'clean' prompts (empty hud) stay clean.
+function fillRolledArchetype(spec) {
+  const wants = new Set(spec.hud.elements);
+  wants.delete('lap');
+  if (spec.archetype === 'shooter') {
+    spec.weapon.enabled = true;
+    if (spec.entities.monsters.length === 0) spec.entities.monsters = [{ type: 'chaser', count: 12 }];
+    if (!spec.entities.pickups.some((p) => p.kind === 'health')) spec.entities.pickups.push({ kind: 'health', count: 3 });
+    if (!spec.entities.pickups.some((p) => p.kind === 'ammo')) spec.entities.pickups.push({ kind: 'ammo', count: 4 });
+    wants.add('health').add('ammo').add('score').add('wave');
+  } else if (spec.archetype === 'soccer') {
+    wants.add('match');
+  } else if (spec.archetype === 'adventure') {
+    wants.add('score').add('objective');
+  }
+  if (spec.hud.elements.length > 0) spec.hud.elements = HUD_ORDER.filter((el) => wants.has(el));
+}
+
 // jitter/fill dimensions the prompt left unspecified; draw order is fixed so
 // results depend only on (rng seed, variety, flags)
 function applyVariety(spec, flags, rng, variety) {
+  // archetype: NEVER overridden when the prompt pinned one; otherwise a low-
+  // probability roll turns the default circuit into another game family
+  if (!flags.archetype && rng.bool(variety * 0.25)) {
+    spec.archetype = rng.pick(['soccer', 'shooter', 'adventure']);
+    fillRolledArchetype(spec);
+  }
   if (!flags.biome && rng.bool(variety)) spec.world.biome = rng.pick(Object.keys(BIOMES));
 
   const jit = Math.round(3 * variety);

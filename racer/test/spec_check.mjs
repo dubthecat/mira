@@ -85,11 +85,57 @@ const CASES = [
     prompt: 'just vibes',
     expect: { biome: 'meadow', monsters: {}, weapon: null, hud: ['speed', 'boost'] },
   },
+  // --- archetype keywords (soccer / shooter / adventure; default circuit)
+  {
+    prompt: 'fifa',
+    expect: { archetype: 'soccer', opponents: 1, monsters: {}, weapon: null,
+              hud: ['speed', 'boost', 'match'] },
+  },
+  {
+    prompt: 'doom arena shooter with waves of 6',
+    expect: { archetype: 'shooter', waveSize: 6, weapon: 'blaster', monsters: { chaser: 12 },
+              hud: ['speed', 'boost', 'health', 'ammo', 'score', 'wave'],
+              pickups: { health: 3, ammo: 4 } },
+  },
+  {
+    prompt: 'open world quest with 8 relics',
+    expect: { archetype: 'adventure', relics: 8, monsters: {}, weapon: null,
+              hud: ['speed', 'boost', 'score', 'objective'] },
+  },
+  {
+    prompt: 'mmo',
+    expect: { archetype: 'adventure', relics: 6, hud: ['speed', 'boost', 'score', 'objective'] },
+  },
+  {
+    prompt: 'street football 1v1 at night',
+    expect: { archetype: 'soccer', opponents: 1, biome: 'night', hud: ['speed', 'boost', 'match'] },
+  },
+  {
+    prompt: 'soccer with 2 opponents',
+    expect: { archetype: 'soccer', opponents: 2 },
+  },
+  {
+    // 'arena' without gun/shoot words must NOT hijack a race into a shooter
+    prompt: 'arena race',
+    expect: { archetype: 'circuit', hud: ['speed', 'boost', 'lap'] },
+  },
 ];
 
 for (const { prompt, expect } of CASES) {
   const spec = compileSpec(prompt, { seed: 1 });
   const errs = [];
+  if (expect.archetype && spec.archetype !== expect.archetype) {
+    errs.push(`archetype ${spec.archetype} != ${expect.archetype}`);
+  }
+  if ('opponents' in expect && spec.soccer.opponents !== expect.opponents) {
+    errs.push(`opponents ${spec.soccer.opponents} != ${expect.opponents}`);
+  }
+  if ('waveSize' in expect && spec.shooter.waveSize !== expect.waveSize) {
+    errs.push(`waveSize ${spec.shooter.waveSize} != ${expect.waveSize}`);
+  }
+  if ('relics' in expect && spec.adventure.relics !== expect.relics) {
+    errs.push(`relics ${spec.adventure.relics} != ${expect.relics}`);
+  }
   if (expect.biome && spec.world.biome !== expect.biome) {
     errs.push(`biome ${spec.world.biome} != ${expect.biome}`);
   }
@@ -143,6 +189,15 @@ for (const { prompt, expect } of CASES) {
   report(ok, 'overrides win over prompt', j({ biome: spec.world.biome, top: spec.vehicle.topSpeedScale, hud: spec.hud.elements }));
 }
 
+// archetype overrides win over archetype keywords too
+{
+  const spec = compileSpec('fifa soccer showdown', {
+    seed: 3,
+    overrides: { archetype: 'circuit' },
+  });
+  report(spec.archetype === 'circuit', 'override wins over archetype keyword', `got ${spec.archetype}`);
+}
+
 // --- 4. variety fills only unspecified dims, stays deterministic
 {
   let keeps = true;
@@ -157,15 +212,37 @@ for (const { prompt, expect } of CASES) {
   report(grip === 0.65, 'variety keeps prompt-set gripScale', `got ${grip}`);
 }
 
+// variety never flips a prompt-pinned archetype, but may roll an unpinned one
+{
+  let pinned = true;
+  const rolled = new Set();
+  for (let seed = 1; seed <= 24; seed++) {
+    if (compileSpec('night soccer match', { seed, variety: 1 }).archetype !== 'soccer') pinned = false;
+    if (compileSpec('doom survival', { seed, variety: 1 }).archetype !== 'shooter') pinned = false;
+    rolled.add(compileSpec('a race', { seed, variety: 1 }).archetype);
+  }
+  report(pinned, 'variety keeps prompt-pinned archetype');
+  report(rolled.size >= 2 && rolled.has('circuit'), 'variety occasionally rolls unpinned archetype', `saw ${[...rolled].join(',')}`);
+  // a rolled shooter must still be a playable shooter (armed, has targets)
+  let playable = true;
+  for (let seed = 1; seed <= 60; seed++) {
+    const s = compileSpec('a race', { seed, variety: 1 });
+    if (s.archetype === 'shooter' && (!s.weapon.enabled || s.entities.monsters.length === 0)) playable = false;
+    if (s.archetype !== 'circuit' && s.hud.elements.includes('lap')) playable = false;
+  }
+  report(playable, 'rolled archetypes stay playable (armed shooter, no stray lap hud)');
+}
+
 // --- 5. validateSpec passes for 50 random prompt-fragment x seed combos
 {
   const pool = [];
   for (const ws of Object.values(KEYWORDS.biome)) pool.push(...ws);
   pool.push(...KEYWORDS.monsterEnable);
-  for (const table of [KEYWORDS.monsterType, KEYWORDS.weapon, KEYWORDS.handling, KEYWORDS.track, KEYWORDS.hud, KEYWORDS.count]) {
+  for (const table of [KEYWORDS.archetype, KEYWORDS.monsterType, KEYWORDS.weapon, KEYWORDS.handling, KEYWORDS.track, KEYWORDS.hud, KEYWORDS.count]) {
     for (const ws of Object.values(table)) pool.push(...ws);
   }
-  pool.push('no hud', 'a few', '8 monsters', '12 turrets', 'race');
+  pool.push('no hud', 'a few', '8 monsters', '12 turrets', 'race',
+            'open world', 'arena', '1v1', '2 opponents', 'waves of 6', '5 relics');
 
   const rng = new Rng(20260707);
   let bad = 0;
