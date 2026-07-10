@@ -5,6 +5,8 @@
 // requires the Suspense boundary.
 //
 // URL params: ?prompt=<text>  compile a GameSpec from the prompt
+//             ?genre=<key>    play a pre-built game from the test battery
+//                             (takes precedence over prompt)
 //             ?seed=<n>       procedural seed (default 1)
 //             ?bot=1          start with the bot driving
 
@@ -20,10 +22,11 @@ const PlayGame = dynamic(() => import('../../components/PlayGame.js'), {
 function PlayInner() {
   const params = useSearchParams();
   const prompt = params.get('prompt') || '';
+  const genre = params.get('genre') || '';
   const seedParam = parseInt(params.get('seed') || '1', 10);
   const seed = (Number.isFinite(seedParam) ? seedParam : 1) >>> 0;
   const bot = params.get('bot') === '1';
-  return <PlayGame prompt={prompt} initialSeed={seed} initialBot={bot} />;
+  return <PlayGame prompt={prompt} genre={genre} initialSeed={seed} initialBot={bot} />;
 }
 
 export default function PlayPage() {

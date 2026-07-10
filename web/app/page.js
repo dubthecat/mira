@@ -1,6 +1,7 @@
 import PromptHero from '../components/PromptHero.js';
 import PipelineDiagram from '../components/PipelineDiagram.js';
 import LoopDiagram from '../components/LoopDiagram.js';
+import GameGallery from '../components/GameGallery.js';
 import { StatTiles, FramesChart } from '../components/EngineStats.js';
 
 export default function Landing() {
@@ -19,6 +20,15 @@ export default function Landing() {
           <p className="hero-hint">
             Press <code>Enter</code> to build · empty prompt gives you the classic circuit
           </p>
+        </section>
+
+        <section className="section">
+          <h2>Or play a pre-built game</h2>
+          <p className="section-copy">
+            Twelve battle-tested genres from the engine&apos;s test battery — the same specs
+            our pilot datasets were recorded with. Thumbnails are real recorded frames.
+          </p>
+          <GameGallery />
         </section>
 
         <section className="section">

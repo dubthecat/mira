@@ -19,6 +19,7 @@ import { createView } from '../../racer/src/render/scene.js';
 import { createHud } from '../../racer/src/render/hud.js';
 import { makeSpec } from '../../racer/src/spec/schema.js';
 import { compileSpec } from '../../racer/src/spec/compile.js';
+import { compileBattery } from '../../racer/src/spec/battery.js';
 import { LocalSimEngine } from '../lib/engine/engineSource.js';
 
 // keyboard -> action names (the dataset vocabulary)
@@ -32,7 +33,7 @@ const KEYMAP = {
   KeyF: 'F',
 };
 
-export default function PlayGame({ prompt, initialSeed = 1, initialBot = false }) {
+export default function PlayGame({ prompt, genre = '', initialSeed = 1, initialBot = false }) {
   const [seed, setSeed] = useState(initialSeed);
   const [botMode, setBotMode] = useState(initialBot);
   const [resetNonce, setResetNonce] = useState(0);
@@ -44,10 +45,16 @@ export default function PlayGame({ prompt, initialSeed = 1, initialBot = false }
   botRef.current = botMode; // the game loop reads this without re-mounting
 
   useEffect(() => {
-    // ---- spec: compile from the prompt; empty prompt -> default racing spec
+    // ---- spec: pre-built genre > prompt > default racing spec
     let spec;
     try {
-      spec = prompt.trim() ? compileSpec(prompt, { seed }) : makeSpec();
+      if (genre) {
+        const entry = compileBattery().find((b) => b.key === genre);
+        if (!entry) throw new Error(`unknown genre '${genre}'`);
+        spec = entry.spec;
+      } else {
+        spec = prompt.trim() ? compileSpec(prompt, { seed }) : makeSpec();
+      }
     } catch (e) {
       setError(String(e?.message || e));
       return undefined;
@@ -150,7 +157,7 @@ export default function PlayGame({ prompt, initialSeed = 1, initialBot = false }
       if (renderer.domElement.parentNode === host) host.removeChild(renderer.domElement);
       engine.dispose();
     };
-  }, [prompt, seed, resetNonce]);
+  }, [prompt, genre, seed, resetNonce]);
 
   return (
     <>

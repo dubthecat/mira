@@ -403,3 +403,64 @@ code,
     display: none;
   }
 }
+
+/* --- pre-built game gallery ------------------------------------------- */
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 16px;
+  margin-top: 24px;
+}
+.gallery-card {
+  display: block;
+  background: var(--panel, #232322);
+  border: 1px solid var(--border, #33332f);
+  border-radius: 8px;
+  overflow: hidden;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 120ms ease, transform 120ms ease;
+}
+.gallery-card:hover {
+  border-color: #3987e5;
+  transform: translateY(-2px);
+}
+.gallery-card img {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-bottom: 1px solid var(--border, #33332f);
+}
+.gallery-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px 12px;
+}
+.gallery-name {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 13px;
+  color: #ffffff;
+}
+.gallery-blurb {
+  font-size: 12.5px;
+  color: #c3c2b7;
+  line-height: 1.4;
+}
+.gallery-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+.gallery-tags em {
+  font-style: normal;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  color: #c3c2b7;
+  border: 1px solid var(--border, #33332f);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
