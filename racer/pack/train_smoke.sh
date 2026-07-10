@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+# MIRA racer smoke-train: validates the ENTIRE training chain (dataset ->
+# loader -> codec training -> codec checkpoint -> world-model training) on a
+# GPU pod, in ~30-60 min, without the gated DINOv3 weights (random-init
+# backbone — mechanics identical, features meaningless; real training swaps in
+# the licensed weights).
+#
+# Designed to run as a RunPod container command. Requires env:
+#   HF_TOKEN          - HF token (dataset download + results upload)
+#   HF_DATASET_REPO   - e.g. WilliamBolduc/racer-world-model-v1
+#   GIT_REPO          - e.g. https://github.com/dubthecat/mira (public)
+#   GIT_BRANCH        - e.g. racer-pipeline
+#   RUNPOD_TERMINATE_KEY - ACCOUNT api key for self-termination. Must NOT be
+#                     named RUNPOD_API_KEY: RunPod injects its own pod-scoped
+#                     key under that name, which can't delete pods
+#   RUNPOD_POD_ID     - injected by RunPod
+#   RUN_NAME          - e.g. smoke1
+set -uo pipefail
+
+terminate() {
+  code=$?
+  echo "[smoke] exiting with code $code — uploading logs then terminating pod"
+  python3 - << 'PYEOF' || true
+import os, json, glob
+from huggingface_hub import HfApi
+api = HfApi(token=os.environ["HF_TOKEN"])
+repo = os.environ["HF_DATASET_REPO"]
+run = os.environ.get("RUN_NAME", "smoke")
+for f in glob.glob("/workspace/logs/*"):
+    try:
+        api.upload_file(path_or_fileobj=f, path_in_repo=f"runs/{run}/{os.path.basename(f)}",
+                        repo_id=repo, repo_type="dataset")
+    except Exception as e:
+        print("upload failed:", f, e)
+PYEOF
+  if [ -n "${RUNPOD_TERMINATE_KEY:-}" ] && [ -n "${RUNPOD_POD_ID:-}" ]; then
+    # documented terminate: DELETE /v1/pods/{id} (docs.runpod.io/pods/manage-pods)
+    resp=$(curl -s -w " http=%{http_code}" -X DELETE "https://rest.runpod.io/v1/pods/${RUNPOD_POD_ID}" \
+      -H "Authorization: Bearer ${RUNPOD_TERMINATE_KEY}" || true)
+    echo "[smoke] terminate response: $resp"
+    export TERM_RESP="$resp"
+    python3 - << 'PYEOF2' || true
+import os, io
+from huggingface_hub import HfApi
+HfApi(token=os.environ["HF_TOKEN"]).upload_file(
+    path_or_fileobj=io.BytesIO(os.environ.get("TERM_RESP", "?").encode()),
+    path_in_repo=f"runs/{os.environ.get('RUN_NAME','smoke')}/TERMINATE.txt",
+    repo_id=os.environ["HF_DATASET_REPO"], repo_type="dataset")
+PYEOF2
+  fi
+  exit "$code"
+}
+trap terminate EXIT INT TERM
+
+mkdir -p /workspace/logs /workspace/weights /workspace/data
+cd /workspace
+exec > >(tee -a /workspace/logs/smoke.log) 2>&1
+echo "[smoke] $(date -u) starting on $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
+
+# --- deps -------------------------------------------------------------------
+# runpod images keep torch in a venv activated via bashrc, which non-login
+# `bash -c` shells skip — find a python that has torch before anything else
+for cand in python3 /opt/venv/bin/python3 /workspace/venv/bin/python3 /venv/bin/python3; do
+  if "$cand" -c "import torch" 2>/dev/null; then
+    export PATH="$(dirname "$(command -v "$cand" || echo "$cand")"):$PATH"
+    break
+  fi
+done
+python3 -c "import torch" || { echo "[smoke] FATAL: no torch-enabled python found"; exit 1; }
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq && apt-get install -y -qq ffmpeg git curl > /dev/null
+pip install -q -U huggingface_hub
+
+# beacon: prove the container ran at all (there is no RunPod logs API — if
+# this marker never appears, the image/command never started)
+python3 - << 'PYEOF' || true
+import os, io
+from huggingface_hub import HfApi
+api = HfApi(token=os.environ["HF_TOKEN"])
+msg = f"started pod={os.environ.get('RUNPOD_POD_ID','?')} gpu={os.popen('nvidia-smi --query-gpu=name --format=csv,noheader').read().strip()}\n"
+api.upload_file(path_or_fileobj=io.BytesIO(msg.encode()),
+                path_in_repo=f"runs/{os.environ.get('RUN_NAME','smoke')}/STARTED.txt",
+                repo_id=os.environ["HF_DATASET_REPO"], repo_type="dataset")
+print("[smoke] beacon uploaded")
+PYEOF
+
+# --- code + dataset ---------------------------------------------------------
+git clone --depth 1 -b "${GIT_BRANCH:-racer-pipeline}" "${GIT_REPO:?}" mira
+python3 - << 'PYEOF'
+import os
+from huggingface_hub import snapshot_download
+snapshot_download(os.environ["HF_DATASET_REPO"], repo_type="dataset",
+                  token=os.environ["HF_TOKEN"], local_dir="/workspace/data",
+                  allow_patterns=["train/*", "test/*"])
+PYEOF
+cd mira
+# torchcodec pinned: newer wheels want CUDA 13 (libnvrtc.so.13) but the
+# image ships torch 2.8 / CUDA 12.8 — 0.7.0 is the repo's pinned pairing
+pip install -q -e '.[train,hf]' 'torchcodec==0.7.0'
+python3 -c "import torch, torchcodec; print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"
+
+# --- random-init DINOv3 backbone under the expected filename ----------------
+export RS_DINO_WEIGHTS_DIR=/workspace/weights
+python3 - << 'PYEOF'
+import torch
+m = torch.hub.load("facebookresearch/dinov3", "dinov3_vitl16", source="github",
+                   verbose=False, pretrained=False)
+torch.save(m.state_dict(), "/workspace/weights/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth")
+print("saved random-init dinov3_vitl16 weights (SMOKE ONLY)")
+PYEOF
+
+# --- guard: dataset action vocab must match the actions config we train with
+python3 - << 'PYEOF'
+import json, re, sys
+idx = json.load(open("/workspace/data/train/index.json"))
+ds_keys = idx.get("action_keys")  # written by pack_dataset.py for spec datasets
+yaml_txt = open("configs/actions/racing.yaml").read()
+cfg_keys = re.findall(r"^\s*-\s*(\S+)\s*$", yaml_txt, re.M)
+if ds_keys is not None and ds_keys != cfg_keys:
+    sys.exit(f"FATAL: dataset action_keys {ds_keys} != configs/actions/racing.yaml {cfg_keys} "
+             f"(order-sensitive) — install the dataset's actions.yaml before training")
+print(f"[smoke] action vocab ok: {ds_keys or cfg_keys}")
+PYEOF
+
+# --- 1) codec smoke ----------------------------------------------------------
+timeout 2400 python scripts/train_codec.py \
+  dataset=racing \
+  dataset.train_index=/workspace/data/train dataset.test_index=/workspace/data/test \
+  wandb.mode=disabled run.steps=40 run.batch_size=2 run.compile=false \
+  run.checkpoint_every="50%" run.output_dir=/workspace/logs/codec \
+  validation.val_first=false validation.val_every="50%" validation.val_n_samples=64 \
+  optim.scheduler.warmup_steps=10 optim.scheduler.decay_steps=0 \
+  dataloader.num_workers=4 2>&1 | tee /workspace/logs/codec_train.log
+CODEC_CKPT=$(find /workspace/logs/codec -name 'checkpoint.pth' | sort | tail -1)
+echo "[smoke] codec checkpoint: ${CODEC_CKPT:?no codec checkpoint produced}"
+
+# --- 2) world-model smoke ----------------------------------------------------
+timeout 2400 python scripts/train_world_model.py \
+  dataset=racing \
+  dataset.train_index=/workspace/data/train dataset.test_index=/workspace/data/test \
+  model.architecture.config.codec_checkpoint="$CODEC_CKPT" \
+  wandb.mode=disabled run.steps=30 run.batch_size=1 run.compile=false \
+  run.checkpoint_every="100%" run.output_dir=/workspace/logs/wm \
+  dataloader.num_workers=4 2>&1 | tee /workspace/logs/wm_train.log
+
+python3 - << 'PYEOF'
+import json, re
+result = {"status": "ok"}
+for name in ("codec", "wm"):
+    txt = open(f"/workspace/logs/{name}_train.log").read()
+    losses = re.findall(r"loss[=:\s]+([0-9.]+[0-9])", txt)
+    result[name] = {"loss_first": losses[0] if losses else None,
+                    "loss_last": losses[-1] if losses else None,
+                    "n_loss_lines": len(losses)}
+json.dump(result, open("/workspace/logs/RESULT.json", "w"), indent=2)
+print("[smoke] RESULT:", result)
+PYEOF
+echo "[smoke] SUCCESS $(date -u)"

@@ -1,0 +1,17 @@
+{
+  "name": "mira-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Public face + online play surface for the MIRA neural game engine: prompt -> GameSpec -> playable game, today on the deterministic Three.js sim, soon streamed from the trained diffusion world model.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "next": "^15.4.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "three": "^0.178.0"
+  }
+}

@@ -1,0 +1,466 @@
+/* MIRA web — design tokens + global styles. Dark only, plain CSS. */
+
+:root {
+  --bg: #1a1a19;
+  --panel: #232322;
+  --text: #ffffff;
+  --text-2: #c3c2b7;
+  --border: #33332f;
+
+  /* validated accent palette (colorblind-safe on this surface) */
+  --blue: #3987e5;   /* primary action */
+  --green: #199e70;  /* "runs now" markers */
+  --amber: #c98500;  /* "training loop" markers */
+
+  /* --font-sans / --font-mono are set on <html> by next/font (see layout.js);
+     redefining them here would self-reference and invalidate the variable */
+
+  --maxw: 1100px;
+  --radius: 8px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--text);
+  text-decoration: none;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+code,
+.mono {
+  font-family: var(--font-mono), ui-monospace, monospace;
+}
+
+/* ---------- landing layout ---------- */
+
+.container {
+  max-width: var(--maxw);
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+.hero {
+  padding: 96px 0 64px;
+  text-align: center;
+}
+
+.hero-kicker {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  margin-bottom: 16px;
+}
+
+.hero h1 {
+  font-size: clamp(28px, 4.5vw, 44px);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  margin-bottom: 12px;
+}
+
+.hero-sub {
+  color: var(--text-2);
+  max-width: 640px;
+  margin: 0 auto 36px;
+  font-size: 17px;
+}
+
+.prompt-form {
+  display: flex;
+  gap: 10px;
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.prompt-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 15px;
+  padding: 16px 18px;
+  outline: none;
+}
+
+.prompt-input::placeholder {
+  color: var(--text-2);
+  opacity: 0.7;
+}
+
+.prompt-input:focus {
+  border-color: var(--blue);
+}
+
+.btn-primary {
+  background: var(--blue);
+  border: 1px solid var(--blue);
+  border-radius: var(--radius);
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 600;
+  padding: 16px 26px;
+  white-space: nowrap;
+}
+
+.btn-primary:hover {
+  filter: brightness(1.1);
+}
+
+.hero-hint {
+  margin-top: 14px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.hero-hint code {
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+/* ---------- sections ---------- */
+
+.section {
+  padding: 56px 0;
+  border-top: 1px solid var(--border);
+}
+
+.section h2 {
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  margin-bottom: 8px;
+}
+
+.section-copy {
+  color: var(--text-2);
+  max-width: 720px;
+  margin-bottom: 32px;
+}
+
+.section-copy strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.diagram-scroll {
+  overflow-x: auto;
+  padding-bottom: 8px;
+}
+
+.diagram-scroll svg {
+  display: block;
+}
+
+.caption {
+  margin-top: 16px;
+  font-size: 14px;
+  color: var(--text-2);
+  max-width: 720px;
+}
+
+.footnote {
+  margin-top: 20px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+/* ---------- stat tiles ---------- */
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+  margin-bottom: 40px;
+}
+
+.tile {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+
+.tile-value {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.tile-label {
+  font-size: 12.5px;
+  color: var(--text-2);
+  margin-top: 2px;
+}
+
+.chart-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.chart-sub {
+  font-size: 13px;
+  color: var(--text-2);
+  margin-bottom: 16px;
+}
+
+/* ---------- footer ---------- */
+
+.footer {
+  border-top: 1px solid var(--border);
+  padding: 28px 0 48px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+/* ---------- play page ---------- */
+
+.play-root {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.play-canvas-host {
+  position: absolute;
+  inset: 0;
+}
+
+.play-canvas-host canvas {
+  display: block;
+}
+
+.play-chrome {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  /* top padding clears the engine HUD's top strip (health / lap / score are
+     baked into the frame — site chrome must never cover them) */
+  padding: 46px 14px 12px;
+  pointer-events: none; /* children opt back in */
+  font-size: 13px;
+}
+
+.play-chrome > * {
+  pointer-events: auto;
+}
+
+.chrome-panel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  background: rgba(26, 26, 25, 0.82);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  backdrop-filter: blur(4px);
+}
+
+.chrome-right {
+  justify-content: flex-end;
+}
+
+.back-link {
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.back-link:hover {
+  color: var(--text);
+}
+
+.spec-name {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.spec-seed {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.controls-hint {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.chrome-btn {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12.5px;
+  padding: 5px 10px;
+}
+
+.chrome-btn:hover {
+  border-color: var(--text-2);
+}
+
+.chrome-btn.active {
+  border-color: var(--green);
+  color: var(--text);
+}
+
+.chrome-btn.active::before {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  margin-right: 6px;
+  vertical-align: 1px;
+}
+
+/* engine badge: local sim live now (green dot), neural pending (amber dot) */
+.engine-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.engine-badge select {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  padding: 4px 6px;
+}
+
+.engine-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--green);
+  flex: none;
+}
+
+.play-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-2);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 14px;
+}
+
+@media (max-width: 720px) {
+  .prompt-form {
+    flex-direction: column;
+  }
+
+  .hero {
+    padding: 64px 0 48px;
+  }
+
+  .controls-hint {
+    display: none;
+  }
+}
+
+/* --- pre-built game gallery ------------------------------------------- */
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 16px;
+  margin-top: 24px;
+}
+.gallery-card {
+  display: block;
+  background: var(--panel, #232322);
+  border: 1px solid var(--border, #33332f);
+  border-radius: 8px;
+  overflow: hidden;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 120ms ease, transform 120ms ease;
+}
+.gallery-card:hover {
+  border-color: #3987e5;
+  transform: translateY(-2px);
+}
+.gallery-card img {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-bottom: 1px solid var(--border, #33332f);
+}
+.gallery-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px 12px;
+}
+.gallery-name {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 13px;
+  color: #ffffff;
+}
+.gallery-blurb {
+  font-size: 12.5px;
+  color: #c3c2b7;
+  line-height: 1.4;
+}
+.gallery-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+.gallery-tags em {
+  font-style: normal;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  color: #c3c2b7;
+  border: 1px solid var(--border, #33332f);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
