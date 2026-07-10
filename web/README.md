@@ -1,6 +1,6 @@
-# MIRA web — the public face + online play surface
+# PredictExpert Game Engine — web (public face + online play surface)
 
-A Next.js (App Router, plain JS) site for the MIRA neural game engine:
+A Next.js (App Router, plain JS) site for the PredictExpert Game Engine:
 
 - `/` — landing page. One prompt box ("Build a game"), the pipeline diagram
   (prompt → GameSpec → procedural game → dataset → RAE codec → diffusion world

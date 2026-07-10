@@ -9,7 +9,7 @@ export default function Landing() {
     <main>
       <div className="container">
         <section className="hero">
-          <div className="hero-kicker">MIRA · neural game engine</div>
+          <div className="hero-kicker">PredictExpert · game engine</div>
           <h1>Type a game. Play it.</h1>
           <p className="hero-sub">
             Prompts compile into playable games — today on the deterministic engine
@@ -42,7 +42,7 @@ export default function Landing() {
           </p>
           <PipelineDiagram />
           <p className="footnote">
-            Inspired by MIRA (Kyutai / General Intuition&apos;s Rocket League world model) and
+            Inspired by Kyutai / General Intuition&apos;s Rocket League world model and
             GameNGen-style frame-by-frame diffusion.
           </p>
         </section>
@@ -74,7 +74,7 @@ export default function Landing() {
 
       <footer className="footer">
         <div className="container">
-          MIRA — prompt → game. The local sim runs in your browser; the world model is in
+          PredictExpert Game Engine — prompt → game. The local sim runs in your browser; the world model is in
           its training loop.
         </div>
       </footer>

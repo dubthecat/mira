@@ -165,7 +165,7 @@ export default function PlayGame({ prompt, genre = '', initialSeed = 1, initialB
 
       <div className="play-chrome">
         <div className="chrome-panel">
-          <Link href="/" className="back-link">← MIRA</Link>
+          <Link href="/" className="back-link">← PredictExpert</Link>
           <span className="spec-name">{specName || '…'}</span>
           <span className="spec-seed">seed {seed}</span>
         </div>
