@@ -83,7 +83,7 @@ export default function PlayGame({ prompt, genre = '', initialSeed = 1, initialB
     renderer.setSize(width(), height());
     host.appendChild(renderer.domElement);
 
-    const view = createView(engine.getWorld().track, { width: width(), height: height(), spec });
+    const view = createView(engine.getWorld(), { width: width(), height: height() });
     view.camera.aspect = width() / height();
     view.camera.updateProjectionMatrix();
     let hud = createHud(spec, { width: width(), height: height() });

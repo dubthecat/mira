@@ -1,18 +1,19 @@
-// World = track + car + bot + entities + game rules, stepped at exactly 20
-// action frames per second (3 physics substeps of 1/60 s each). One
-// stepFrame() call is one dataset frame: the keys applied during it are the
-// action line recorded for the frame rendered *before* the step (contract:
-// keys on line t produce frame t+1).
+// World = mode (archetype) + avatar + entities + shared game rules, stepped
+// at exactly 20 action frames per second (3 physics substeps of 1/60 s each).
+// One stepFrame() call is one dataset frame: the keys applied during it are
+// the action line recorded for the frame rendered *before* the step
+// (contract: keys on line t produce frame t+1).
 //
-// Everything is a function of (seed, spec): the GameSpec (see spec/schema.js)
-// selects biome, monsters, weapons, handling and HUD; the seed selects the
-// concrete track/personality/spawn rolls within that game.
+// Everything is a function of (seed, spec). The spec's archetype selects a
+// mode (circuit racing, soccer, arena shooter, open-world adventure — see
+// modes/) which owns space, avatar params, bot policy and objectives; the
+// world owns what every archetype shares: weapons, monsters, pickups,
+// health/damage/respawn, score, and the recorder-facing surface.
 
 import { Rng } from './rng.js';
-import { buildTrack } from './track.js';
-import { Car, carParamsFor, ACTION_KEYS } from './car.js';
-import { BotDriver } from './bot.js';
+import { ACTION_KEYS } from './car.js';
 import { EntitySystem } from './entities.js';
+import { createMode } from './modes/index.js';
 import { makeSpec, actionKeysFor, specHash, WEAPON_KINDS } from '../spec/schema.js';
 
 export const FPS = 20;
@@ -29,25 +30,17 @@ export class World {
     // the spec hash salts the seed so the same seed under different specs
     // yields different worlds
     this.rng = new Rng((this.seed ^ specHash(this.spec)) >>> 0);
-    this.track = buildTrack(this.rng, {
-      radiusScale: this.spec.world.trackScale,
-      widthScale: this.spec.world.widthScale,
-      boostPads: this.spec.world.boostPads,
-    });
-    this.car = new Car(this.track, 6, carParamsFor(this.spec));
-    this.bot = new BotDriver(this.track, this.rng, this.spec);
-    this.entities = new EntitySystem(this.spec, this.track, this.rng);
 
     this.frame = 0;
-    this.lap = 0;
-    this.progress = 0;
-    this.lapStartFrame = 0;
-    this.pads = this.track.pads.map((p) => ({ ...p, cooldown: 0 }));
-    this.lastQ = this.track.nearest(this.car.x, this.car.y);
-    this.prevS = this.lastQ.s;
     this.events = [];
 
-    // combat / survival state (world-owned; the car is just a body)
+    // mode builds the play space, avatar (world.car) and objective state
+    this.mode = createMode(this.spec);
+    this.mode.build(this);
+
+    this.entities = new EntitySystem(this.spec, this.mode.placer(this), this.rng);
+
+    // combat / survival state (world-owned; the avatar is just a body)
     this.health = this.spec.rules.healthMax;
     this.ammo = this.spec.weapon.enabled ? this.spec.weapon.ammoStart : 0;
     this.score = 0;
@@ -56,10 +49,10 @@ export class World {
     this.fireCooldownSub = 0;
   }
 
-  // Advance one 20 Hz action frame. keys=null lets the bot drive.
+  // Advance one 20 Hz action frame. keys=null lets the mode's bot drive.
   stepFrame(keys = null) {
     if (keys === null) {
-      keys = this.bot.decide(this.car, this.lastQ, this);
+      keys = this.mode.decide(this);
     }
     this.lastKeys = keys;
     const frameEvents = [];
@@ -71,59 +64,28 @@ export class World {
       if (this.fireCooldownSub > 0) this.fireCooldownSub--;
 
       if (this.respawnSub > 0) {
-        // death freeze: world keeps ticking, car doesn't
+        // death freeze: world keeps ticking, avatar doesn't
         this.respawnSub--;
         if (this.respawnSub === 0) {
-          const q = this.track.sampleAt(this.lastQ.s);
-          this.car.x = q.x;
-          this.car.y = q.y;
-          this.car.heading = q.theta;
+          const pose = this.mode.respawnPose(this);
+          this.car.x = pose.x;
+          this.car.y = pose.y;
+          this.car.heading = pose.heading;
           this.car.vx = 0;
           this.car.vy = 0;
           this.car.steer = 0;
-          this.car.hintIdx = this.track.nearest(q.x, q.y).idx;
+          if (this.track) this.car.hintIdx = this.track.nearest(pose.x, pose.y).idx;
           this.health = rules.healthMax;
           this.invulnSub = 40 * SUBSTEPS;
           frameEvents.push({ name: 'CarRespawned', data: {} });
         }
       } else {
-        const q = this.car.step(keys, DT);
-        this.lastQ = q;
+        this.mode.stepAvatar(this, keys, DT);
         maxImpact = Math.max(maxImpact, this.car.wallImpact);
 
-        // lap progress: accumulate wrapped delta-s
-        let dS = q.s - this.prevS;
-        const L = this.track.length;
-        if (dS < -L / 2) dS += L;
-        if (dS > L / 2) dS -= L;
-        this.progress += dS;
-        this.prevS = q.s;
-        const lapNow = Math.floor(this.progress / L);
-        if (lapNow > this.lap) {
-          this.lap = lapNow;
-          frameEvents.push({
-            name: 'LapCompleted',
-            data: { lap: this.lap, lapFrames: this.frame - this.lapStartFrame },
-          });
-          this.lapStartFrame = this.frame;
-        }
+        this.mode.postStep(this, keys, DT, frameEvents);
 
-        // boost pads
-        for (const pad of this.pads) {
-          if (pad.cooldown > 0) {
-            pad.cooldown = Math.max(0, pad.cooldown - DT);
-            continue;
-          }
-          const dx = this.car.x - pad.x;
-          const dy = this.car.y - pad.y;
-          if (dx * dx + dy * dy < 2.2 * 2.2) {
-            pad.cooldown = 4;
-            this.car.boost = Math.min(100, this.car.boost + 30);
-            frameEvents.push({ name: 'BoostPickup', data: { s: pad.s } });
-          }
-        }
-
-        // weapon
+        // weapon (shared across archetypes)
         if (
           this.spec.weapon.enabled &&
           keys.F &&
@@ -138,7 +100,7 @@ export class World {
         }
       }
 
-      // entities tick even while the car is dead (world stays alive)
+      // entities tick even while the avatar is dead (world stays alive)
       const res = this.entities.step(this.car, this.frame, DT);
       for (const e of res.events) {
         if (e.name === 'MonsterKilled') this.score += rules.scorePerKill;
@@ -186,7 +148,6 @@ export class World {
   // to later derive rewards or debug, including live entity state.
   snapshot() {
     const c = this.car;
-    const q = this.lastQ;
     const r = (v) => Math.round(v * 1000) / 1000;
     const snap = {
       car: {
@@ -200,13 +161,8 @@ export class World {
         boosting: c.boosting,
         drifting: c.drifting,
       },
-      track: {
-        s: r(q.s),
-        lateral: r(q.lateral),
-        lap: this.lap,
-        progress: r(this.progress),
-      },
     };
+    this.mode.snapshot(this, snap);
     if (this.spec.entities.monsters.length > 0 || this.spec.weapon.enabled) {
       snap.combat = {
         health: this.health,

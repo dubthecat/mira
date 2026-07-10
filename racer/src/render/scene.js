@@ -27,7 +27,8 @@ function hash01(i) {
 // one coherent biome
 function resolvePalette(track, spec) {
   const b = BIOMES[spec.world.biome];
-  const j = track.scenery.palette;
+  // trackless modes have no per-seed scenery jitter; use the biome base
+  const j = track ? track.scenery.palette : { grassHue: 0.31, grassLight: 0.37, skyHue: 0.58, asphaltLight: 0.2 };
   return {
     ...b,
     grassHue: b.grassHue + (j.grassHue - 0.31),
@@ -37,8 +38,22 @@ function resolvePalette(track, spec) {
   };
 }
 
-export function createView(track, { width, height, spec = null }) {
-  spec = spec || makeSpec();
+// Mode scene builders (non-circuit archetypes): each exports
+// buildModeScene(scene, world, pal, shared) -> { update(world, dt),
+// buildAvatar?(scene, spec) } — shared gives them the reusable pieces.
+import { buildSoccerScene } from './modes/soccer.js';
+import { buildShooterScene } from './modes/shooter.js';
+import { buildAdventureScene } from './modes/adventure.js';
+
+const MODE_SCENES = {
+  soccer: buildSoccerScene,
+  shooter: buildShooterScene,
+  adventure: buildAdventureScene,
+};
+
+export function createView(world, { width, height }) {
+  const spec = world.spec || makeSpec();
+  const track = world.track || null;
   const pal = resolvePalette(track, spec);
   const scene = new THREE.Scene();
 
@@ -53,13 +68,24 @@ export function createView(track, { width, height, spec = null }) {
   sun.position.set(60, 100, 30);
   scene.add(sun);
 
-  buildGround(scene, track, grass);
-  buildTrackSurface(scene, track, pal);
-  buildWalls(scene, track, pal);
-  buildStartGantry(scene, track);
-  const padRig = buildBoostPads(scene, track);
-  buildScenery(scene, track, pal);
-  const carRig = buildCar(scene, spec.vehicle.color, spec.vehicle.body);
+  let padRig = { meshes: [], onMat: null, offMat: null };
+  let modeScene = null;
+  let carRig;
+  if (world.mode && spec.archetype !== 'circuit') {
+    const shared = { buildCar, buildEntities, updateEntities, hash01, grass };
+    modeScene = MODE_SCENES[spec.archetype](scene, world, pal, shared);
+    carRig = modeScene.buildAvatar
+      ? modeScene.buildAvatar(scene, spec)
+      : buildCar(scene, spec.vehicle.color, spec.vehicle.body);
+  } else {
+    buildGround(scene, track, grass);
+    buildTrackSurface(scene, track, pal);
+    buildWalls(scene, track, pal);
+    buildStartGantry(scene, track);
+    padRig = buildBoostPads(scene, track);
+    buildScenery(scene, track, pal);
+    carRig = buildCar(scene, spec.vehicle.color, spec.vehicle.body);
+  }
   const entityRig = buildEntities(scene, spec, track);
 
   // --- chase camera
@@ -107,11 +133,12 @@ export function createView(track, { width, height, spec = null }) {
 
     updateEntities(entityRig, world);
 
-    // boost pads dim while on cooldown
+    // boost pads dim while on cooldown (circuit only)
     for (let i = 0; i < padRig.meshes.length; i++) {
       const on = world.pads[i].cooldown <= 0;
       padRig.meshes[i].material = on ? padRig.onMat : padRig.offMat;
     }
+    if (modeScene) modeScene.update(world, dt);
 
     // camera
     const fx = Math.cos(c.heading);
@@ -149,8 +176,8 @@ export function createView(track, { width, height, spec = null }) {
     });
     // pad materials are swapped in update(), so the inactive one may not be
     // reachable by traversal
-    mats.add(padRig.onMat);
-    mats.add(padRig.offMat);
+    if (padRig.onMat) mats.add(padRig.onMat);
+    if (padRig.offMat) mats.add(padRig.offMat);
     for (const g of geos) g.dispose();
     for (const m of mats) m.dispose();
   }

@@ -47,7 +47,7 @@ function reset(newSeed) {
   world = new World(seed, spec);
   if (hud) hud.dispose();
   if (view) view.dispose();
-  view = createView(world.track, { width: innerWidth, height: innerHeight, spec });
+  view = createView(world, { width: innerWidth, height: innerHeight });
   hud = createHud(spec, { width: innerWidth, height: innerHeight });
   view.camera.aspect = innerWidth / innerHeight;
   view.camera.updateProjectionMatrix();

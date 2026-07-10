@@ -14,9 +14,11 @@ const MONSTER_RESPAWN_FRAMES = 300; // 15 s
 const PICKUP_COOLDOWN = 8; // seconds
 
 export class EntitySystem {
-  constructor(spec, track, seedRng) {
+  // placer: mode-provided placement strategy (see modes/index.js) —
+  // spawnMonster(rng, type), spawnPickup(rng), optional wallGap(m)
+  constructor(spec, placer, seedRng) {
     this.spec = spec;
-    this.track = track;
+    this.placer = placer;
     this.rng = seedRng.fork('entities');
     this.monsters = [];
     this.projectiles = []; // {x,y,vx,vy,ttl,hostile,damage,hintIdx,alive}
@@ -29,7 +31,6 @@ export class EntitySystem {
   }
 
   _spawnMonsters() {
-    const t = this.track;
     let id = 0;
     for (const group of this.spec.entities.monsters) {
       const base = MONSTER_TYPES[group.type];
@@ -40,26 +41,14 @@ export class EntitySystem {
           size: base.size * (group.scale || 1),
           color: group.color !== undefined ? group.color : base.color,
         };
-        // distribute along the track, biased away from the start line
-        const s = this.rng.range(0.08, 0.98) * t.length;
-        const q = t.sampleAt(s);
-        const nx = -Math.sin(q.theta);
-        const ny = Math.cos(q.theta);
-        let lat;
-        if (group.type === 'patroller') {
-          lat = 0; // lives on the road, crossing it
-        } else if (group.type === 'turret') {
-          lat = (this.rng.bool() ? 1 : -1) * (q.halfWidth + this.rng.range(4, 10));
-        } else {
-          lat = (this.rng.bool() ? 1 : -1) * (q.halfWidth + this.rng.range(6, 22));
-        }
+        const at = this.placer.spawnMonster(this.rng, group.type);
         const m = {
           id: id++,
           type: group.type,
           cfg,
-          s,
-          lairX: q.x + nx * lat,
-          lairY: q.y + ny * lat,
+          s: at.s,
+          lairX: at.lairX,
+          lairY: at.lairY,
           x: 0,
           y: 0,
           heading: this.rng.range(0, 2 * Math.PI),
@@ -69,14 +58,14 @@ export class EntitySystem {
           respawnAt: -1,
           hitFlash: 0,
           contactCd: 0,
-          hintIdx: -1, // filled by first nearest() (global scan once)
+          hintIdx: -1, // filled by the placer's first wall query (if any)
           wallGap: 99,
           fireCooldown: this.rng.range(0.5, 2.0), // desync turret volleys
-          // patroller endpoints: across the road at its s
-          px0: q.x + nx * (q.halfWidth - 1.5),
-          py0: q.y + ny * (q.halfWidth - 1.5),
-          px1: q.x - nx * (q.halfWidth - 1.5),
-          py1: q.y - ny * (q.halfWidth - 1.5),
+          // patroller endpoints (mode-defined sweep)
+          px0: at.px0,
+          py0: at.py0,
+          px1: at.px1,
+          py1: at.py1,
         };
         m.x = m.lairX;
         m.y = m.lairY;
@@ -86,18 +75,10 @@ export class EntitySystem {
   }
 
   _spawnPickups() {
-    const t = this.track;
     for (const group of this.spec.entities.pickups) {
       for (let i = 0; i < group.count; i++) {
-        const s = this.rng.range(0.05, 0.95) * t.length;
-        const q = t.sampleAt(s);
-        const lat = this.rng.range(-1, 1) * Math.max(0, q.halfWidth - 3);
-        this.pickups.push({
-          kind: group.kind,
-          x: q.x - Math.sin(q.theta) * lat,
-          y: q.y + Math.cos(q.theta) * lat,
-          cooldown: 0,
-        });
+        const at = this.placer.spawnPickup(this.rng);
+        this.pickups.push({ kind: group.kind, x: at.x, y: at.y, cooldown: 0 });
       }
     }
   }
@@ -167,11 +148,10 @@ export class EntitySystem {
         m.heading = wrapAngle(m.heading + clamp(wrapAngle(want - m.heading), -3.2 * dt, 3.2 * dt));
         m.x += Math.cos(m.heading) * speed * dt;
         m.y += Math.sin(m.heading) * speed * dt;
-        // track distance-to-wall so the renderer can hover chasers OVER the
-        // barrier instead of clipping through it
-        const q = this.track.nearest(m.x, m.y, m.hintIdx);
-        m.hintIdx = q.idx;
-        m.wallGap = Math.abs(Math.abs(q.lateral) - q.halfWidth);
+        // distance-to-wall so the renderer can hover chasers OVER barriers
+        // instead of clipping through them (circuit only; other spaces are
+        // hard-walled for monsters too)
+        if (this.placer.wallGap) m.wallGap = this.placer.wallGap(m);
       } else if (m.type === 'patroller') {
         // triangle-wave sweep between the two road edges
         const period = Math.hypot(m.px1 - m.px0, m.py1 - m.py0) / m.cfg.speed;

@@ -40,7 +40,7 @@ window.__init = (config) => {
   renderer.setPixelRatio(1);
   renderer.setSize(config.width, config.height);
   document.body.appendChild(renderer.domElement);
-  view = createView(world.track, { width: config.width, height: config.height, spec });
+  view = createView(world, { width: config.width, height: config.height });
   hud = createHud(spec, { width: config.width, height: config.height });
 
   // unrecorded warmup for varied starting states (speed, mid-corner, ...).

@@ -60,10 +60,30 @@ export const WEAPON_KINDS = {
 
 export const BASE_KEYS = ['W', 'S', 'A', 'D', 'Space', 'LShiftKey'];
 
+export const ARCHETYPES = ['circuit', 'soccer', 'shooter', 'adventure'];
+
 export const DEFAULT_SPEC = {
   name: 'racing-classic',
   prompt: '',
-  version: 1,
+  version: 2,
+  // what KIND of game this is; each archetype is a mode module (src/sim/modes)
+  // sharing the same avatar physics, entities, recorder and dataset contract
+  archetype: 'circuit',
+  // archetype-specific knobs (only the active archetype's block is read)
+  soccer: {
+    opponents: 1, // 0..2 rival cars chasing the ball
+    pitchScale: 1.0,
+  },
+  shooter: {
+    waveSize: 4, // monsters per wave
+    waveEveryFrames: 360, // 18 s between waves
+    arenaScale: 1.0,
+  },
+  adventure: {
+    relics: 6,
+    worldScale: 1.0, // multiplies the open-terrain extent
+    onFoot: false, // true = runner avatar instead of the car
+  },
   world: {
     biome: 'meadow',
     // multipliers over the procedural track generator's built-in ranges
@@ -130,6 +150,16 @@ export function validateSpec(spec) {
   const fail = (msg) => {
     throw new Error(`invalid GameSpec: ${msg}`);
   };
+  if (!ARCHETYPES.includes(spec.archetype)) {
+    fail(`unknown archetype '${spec.archetype}' (have: ${ARCHETYPES})`);
+  }
+  if (!(spec.soccer.opponents >= 0 && spec.soccer.opponents <= 2)) fail('soccer.opponents out of [0, 2]');
+  if (!(spec.soccer.pitchScale >= 0.7 && spec.soccer.pitchScale <= 1.6)) fail('soccer.pitchScale out of [0.7, 1.6]');
+  if (!(spec.shooter.waveSize >= 1 && spec.shooter.waveSize <= 12)) fail('shooter.waveSize out of [1, 12]');
+  if (!(spec.shooter.waveEveryFrames >= 100 && spec.shooter.waveEveryFrames <= 2400)) fail('shooter.waveEveryFrames out of [100, 2400]');
+  if (!(spec.shooter.arenaScale >= 0.7 && spec.shooter.arenaScale <= 1.8)) fail('shooter.arenaScale out of [0.7, 1.8]');
+  if (!(spec.adventure.relics >= 2 && spec.adventure.relics <= 14)) fail('adventure.relics out of [2, 14]');
+  if (!(spec.adventure.worldScale >= 0.6 && spec.adventure.worldScale <= 2)) fail('adventure.worldScale out of [0.6, 2]');
   if (!BIOMES[spec.world.biome]) fail(`unknown biome '${spec.world.biome}' (have: ${Object.keys(BIOMES)})`);
   if (spec.weapon.enabled && !WEAPON_KINDS[spec.weapon.kind]) {
     fail(`unknown weapon kind '${spec.weapon.kind}' (have: ${Object.keys(WEAPON_KINDS)})`);
