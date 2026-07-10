@@ -60,7 +60,8 @@ window.__init = (config) => {
 
   return {
     seed: world.seed,
-    trackLength: Math.round(world.track.length * 100) / 100,
+    // trackless modes (arena/openfield archetypes) report 0
+    trackLength: world.track ? Math.round(world.track.length * 100) / 100 : 0,
     actionKeys: world.actionKeys,
     specName: spec.name,
   };
@@ -89,10 +90,10 @@ window.__episodeMeta = () => ({
   seed: world.seed,
   frames: world.frame - recordStartFrame,
   events: world.events.map((e) => ({ ...e, frame: e.frame - recordStartFrame })),
-  laps: world.lap,
+  laps: world.lap || 0,
   score: world.score,
-  progress: Math.round(world.progress),
-  trackLength: Math.round(world.track.length * 100) / 100,
+  progress: Math.round(world.progress || 0),
+  trackLength: world.track ? Math.round(world.track.length * 100) / 100 : 0,
 });
 
 window.__ready = true;
