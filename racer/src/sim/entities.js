@@ -60,6 +60,8 @@ export class EntitySystem {
           contactCd: 0,
           hintIdx: -1, // filled by the placer's first wall query (if any)
           wallGap: 99,
+          fuse: -1, // bomber fuse seconds left (-1 = unarmed)
+          fuseFrac: 0, // render surface: fuse remaining / fuseSec (0 unarmed)
           fireCooldown: this.rng.range(0.5, 2.0), // desync turret volleys
           // patroller endpoints (mode-defined sweep)
           px0: at.px0,
@@ -101,6 +103,20 @@ export class EntitySystem {
         alive: true,
       });
     }
+  }
+
+  // Bomber detonation: emits the render-facing event and returns the area
+  // damage to the car (full damage at the centre, linear falloff to the blast
+  // radius). Damage still flows through step()'s damageToCar return, so the
+  // world's invuln/death accounting applies unchanged.
+  _bomberBlast(m, car, events) {
+    m.fuse = -1;
+    m.fuseFrac = 0;
+    const r2 = (v) => Math.round(v * 100) / 100;
+    events.push({ name: 'BomberExploded', data: { id: m.id, x: r2(m.x), y: r2(m.y) } });
+    const d = Math.hypot(car.x - m.x, car.y - m.y);
+    if (d >= m.cfg.blastRadius) return 0;
+    return Math.max(1, Math.round(m.cfg.damage * (1 - d / m.cfg.blastRadius)));
   }
 
   // One physics substep. Returns events; mutates world-owned car state via
@@ -148,9 +164,12 @@ export class EntitySystem {
         m.heading = wrapAngle(m.heading + clamp(wrapAngle(want - m.heading), -3.2 * dt, 3.2 * dt));
         m.x += Math.cos(m.heading) * speed * dt;
         m.y += Math.sin(m.heading) * speed * dt;
+        // arena/openfield placers hard-wall monsters against the space so
+        // amblers never wander through walls/pillars/structures the avatar
+        // bounces off (no rng draws; circuit keeps its hover behavior below)
+        if (this.placer.constrainMonster) this.placer.constrainMonster(m);
         // distance-to-wall so the renderer can hover chasers OVER barriers
-        // instead of clipping through them (circuit only; other spaces are
-        // hard-walled for monsters too)
+        // instead of clipping through them (circuit only)
         if (this.placer.wallGap) m.wallGap = this.placer.wallGap(m);
       } else if (m.type === 'patroller') {
         // triangle-wave sweep between the two road edges
@@ -187,11 +206,49 @@ export class EntitySystem {
           });
           events.push({ name: 'TurretFired', data: { id: m.id } });
         }
+      } else if (m.type === 'bomber') {
+        // kamikaze: chaser-style seek toward the car (amble near the lair when
+        // out of aggro), then arm a fuse in blast range. Once armed it is
+        // committed — the fuse burns down (fuseFrac drives the render blink)
+        // and it detonates for distance-scaled area damage. No rng draws here,
+        // so existing types' draw order is untouched.
+        const aggro = distCar < m.cfg.aggroRadius;
+        let targetX;
+        let targetY;
+        let speed;
+        if (aggro) {
+          targetX = car.x;
+          targetY = car.y;
+          speed = m.cfg.speed;
+        } else {
+          const tPhase = this.t * 0.4 + m.phase;
+          targetX = m.lairX + Math.cos(tPhase) * 8;
+          targetY = m.lairY + Math.sin(tPhase * 0.8) * 8;
+          speed = m.cfg.speed * 0.3;
+        }
+        const want = Math.atan2(targetY - m.y, targetX - m.x);
+        m.heading = wrapAngle(m.heading + clamp(wrapAngle(want - m.heading), -3.2 * dt, 3.2 * dt));
+        m.x += Math.cos(m.heading) * speed * dt;
+        m.y += Math.sin(m.heading) * speed * dt;
+        if (this.placer.constrainMonster) this.placer.constrainMonster(m); // hard-wall (see chaser)
+        if (this.placer.wallGap) m.wallGap = this.placer.wallGap(m); // hover over circuit walls
+        if (m.fuse < 0 && distCar < m.cfg.blastRadius * 0.6) m.fuse = m.cfg.fuseSec;
+        if (m.fuse >= 0) {
+          m.fuse -= dt;
+          m.fuseFrac = Math.max(0, m.fuse / m.cfg.fuseSec);
+          if (m.fuse <= 0) {
+            m.alive = false;
+            m.respawnAt = frame + MONSTER_RESPAWN_FRAMES;
+            damageToCar += this._bomberBlast(m, car, events);
+            continue; // dead: skip the contact block below
+          }
+        }
       }
 
       // contact damage, gated by a per-monster cooldown so wave-positioned
       // patrollers (whose position resets every substep) can't re-trigger
-      if (distCar < m.cfg.size + 1.6 && m.type !== 'turret' && !(m.contactCd > 0)) {
+      // (bombers deal damage only through their explosion, never contact)
+      if (distCar < m.cfg.size + 1.6 && m.type !== 'turret' && m.type !== 'bomber' && !(m.contactCd > 0)) {
         damageToCar += m.cfg.damage;
         m.contactCd = 45; // 0.75 s of substeps
         if (m.type === 'chaser') {
@@ -200,6 +257,8 @@ export class EntitySystem {
           const push = m.cfg.size + 3.5;
           m.x -= (dxc / Math.max(distCar, 0.1)) * push;
           m.y -= (dyc / Math.max(distCar, 0.1)) * push;
+          // the shove must not teleport the monster through a wall/pillar
+          if (this.placer.constrainMonster) this.placer.constrainMonster(m);
         }
         events.push({ name: 'MonsterContact', data: { id: m.id, type: m.type } });
       }
@@ -234,6 +293,8 @@ export class EntitySystem {
               m.alive = false;
               m.respawnAt = frame + MONSTER_RESPAWN_FRAMES;
               events.push({ name: 'MonsterKilled', data: { id: m.id, type: m.type } });
+              // shot bombers detonate instantly where they died
+              if (m.type === 'bomber') damageToCar += this._bomberBlast(m, car, events);
             } else {
               events.push({ name: 'MonsterHit', data: { id: m.id } });
             }

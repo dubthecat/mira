@@ -63,6 +63,13 @@ export class World {
       if (this.invulnSub > 0) this.invulnSub--;
       if (this.fireCooldownSub > 0) this.fireCooldownSub--;
 
+      // mode-declared control freeze (e.g. soccer kickoff): same semantics
+      // as the death freeze for everything the player could otherwise do
+      const modeFrozen = !!this.mode.frozen?.(this);
+      // objective clocks that must advance even while the avatar is dead
+      // (e.g. shooter wave scheduling)
+      this.mode.tick?.(this, DT, frameEvents);
+
       if (this.respawnSub > 0) {
         // death freeze: world keeps ticking, avatar doesn't
         this.respawnSub--;
@@ -79,6 +86,9 @@ export class World {
           this.invulnSub = 40 * SUBSTEPS;
           frameEvents.push({ name: 'CarRespawned', data: {} });
         }
+        // mode bodies (ball, rival cars) keep moving while the avatar is
+        // dead — a dead player must not stop the world
+        this.mode.stepBodies?.(this, DT, frameEvents);
       } else {
         this.mode.stepAvatar(this, keys, DT);
         maxImpact = Math.max(maxImpact, this.car.wallImpact);
@@ -88,6 +98,7 @@ export class World {
         // weapon (shared across archetypes)
         if (
           this.spec.weapon.enabled &&
+          !modeFrozen &&
           keys.F &&
           this.fireCooldownSub <= 0 &&
           this.ammo >= WEAPON_KINDS[this.spec.weapon.kind].ammoPerShot
@@ -106,7 +117,7 @@ export class World {
         if (e.name === 'MonsterKilled') this.score += rules.scorePerKill;
         frameEvents.push(e);
       }
-      if (res.damageToCar > 0 && this.invulnSub <= 0 && this.respawnSub <= 0) {
+      if (res.damageToCar > 0 && this.invulnSub <= 0 && this.respawnSub <= 0 && !modeFrozen) {
         this.health -= res.damageToCar;
         this.invulnSub = rules.contactInvulnFrames * SUBSTEPS;
         frameEvents.push({ name: 'CarDamaged', data: { health: Math.max(0, this.health) } });
@@ -118,7 +129,7 @@ export class World {
       }
 
       // pickups (world knows the caps, entities know the positions)
-      if (this.respawnSub <= 0) {
+      if (this.respawnSub <= 0 && !modeFrozen) {
         const nHealth = this.entities.tryCollect(this.car, 'health', this.health < rules.healthMax);
         if (nHealth > 0) {
           this.health = Math.min(rules.healthMax, this.health + 30 * nHealth);

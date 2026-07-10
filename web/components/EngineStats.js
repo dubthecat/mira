@@ -1,13 +1,24 @@
 // "Battle-tested engine" figures: a row of stat tiles + one calm horizontal
 // bar row. Server components, no client JS.
 //
+// Tiles are derived from the engine's own battery where possible (genre and
+// archetype counts track compileBattery() automatically); the rest are
+// engine constants.
+//
 // Chart notes (single series, so no legend): every bar carries a direct
 // label and value in text tokens; the mark alone wears the data color.
 // The six pilot datasets are the same size on purpose — the row reads as
 // breadth of coverage, not variance.
 
+import { compileBattery } from '../../racer/src/spec/battery.js';
+
+const battery = compileBattery();
+const GENRE_COUNT = battery.length;
+const ARCHETYPE_COUNT = new Set(battery.map((b) => b.spec.archetype)).size;
+
 const TILES = [
-  { value: '12', label: 'genres' },
+  { value: String(GENRE_COUNT), label: 'genres in the battery' },
+  { value: String(ARCHETYPE_COUNT), label: 'game archetypes' },
   { value: '5', label: 'biomes' },
   { value: '3', label: 'vehicle bodies' },
   { value: '7', label: 'action keys' },
@@ -58,7 +69,9 @@ export function FramesChart() {
     <div>
       <div className="chart-title">Frames per pilot dataset, by genre</div>
       <div className="chart-sub">
-        Six pilot specs, one budget: 14,400 frames each — the row measures breadth of coverage, not variance.
+        The pilot batch: {GENRES.length} specs recorded at 14,400 frames each — a fixed budget per
+        genre, so the row reads as breadth of coverage, not variance. The rest of the battery
+        queues up as recording continues.
       </div>
       <div className="diagram-scroll">
         <svg
@@ -66,7 +79,7 @@ export function FramesChart() {
           width={CHART_W}
           height={CHART_H}
           role="img"
-          aria-label="Bar chart: six pilot datasets (classic-gp, desert-blaster, night-neon-drift, lava-gauntlet, snow-patrol, mixed-mayhem) with 14,400 frames each."
+          aria-label={`Bar chart: the ${GENRES.length} pilot datasets (${GENRES.join(', ')}) with 14,400 frames each.`}
           style={{ maxWidth: '100%', height: 'auto', minWidth: '640px' }}
         >
           {/* hairline baseline */}

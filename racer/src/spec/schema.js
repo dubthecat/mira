@@ -51,6 +51,10 @@ export const MONSTER_TYPES = {
   // static turret lobbing slow projectiles the car must dodge
   turret: { speed: 0, size: 2.2, health: 4, damage: 22, aggroRadius: 70, color: 0xb8443c,
             fireEvery: 2.0, projSpeed: 22 },
+  // kamikaze: seeks the car, arms a short fuse up close, explodes for
+  // distance-scaled area damage (shot bombers detonate instantly)
+  bomber: { speed: 10, size: 1.8, health: 1, damage: 30, aggroRadius: 55, color: 0xd9a21b,
+            fuseSec: 1.4, blastRadius: 7 },
 };
 
 export const WEAPON_KINDS = {
@@ -60,7 +64,7 @@ export const WEAPON_KINDS = {
 
 export const BASE_KEYS = ['W', 'S', 'A', 'D', 'Space', 'LShiftKey'];
 
-export const ARCHETYPES = ['circuit', 'soccer', 'shooter', 'adventure'];
+export const ARCHETYPES = ['circuit', 'soccer', 'shooter', 'adventure', 'pursuit'];
 
 export const DEFAULT_SPEC = {
   name: 'racing-classic',
@@ -140,8 +144,22 @@ export function actionKeysFor(spec) {
   return spec.weapon.enabled ? [...BASE_KEYS, 'F'] : [...BASE_KEYS];
 }
 
+// Archetype-gated knob blocks: kept OUT of DEFAULT_SPEC so adding a new
+// archetype never changes the JSON (and therefore the specHash world-seed)
+// of existing specs. Injected only when the archetype is active.
+export const PURSUIT_DEFAULTS = {
+  hunters: 3, // 1..5 chase cars hunting the player
+  heat: 1.0, // hunter speed multiplier (difficulty)
+  worldScale: 1.0,
+};
+
 export function makeSpec(overrides = {}) {
   const spec = merge(DEFAULT_SPEC, overrides);
+  if (spec.archetype === 'pursuit') {
+    spec.pursuit = merge(PURSUIT_DEFAULTS, spec.pursuit || {});
+  } else {
+    delete spec.pursuit;
+  }
   validateSpec(spec);
   return spec;
 }
@@ -159,6 +177,11 @@ export function validateSpec(spec) {
   if (!(spec.shooter.waveEveryFrames >= 100 && spec.shooter.waveEveryFrames <= 2400)) fail('shooter.waveEveryFrames out of [100, 2400]');
   if (!(spec.shooter.arenaScale >= 0.7 && spec.shooter.arenaScale <= 1.8)) fail('shooter.arenaScale out of [0.7, 1.8]');
   if (!(spec.adventure.relics >= 2 && spec.adventure.relics <= 14)) fail('adventure.relics out of [2, 14]');
+  if (spec.archetype === 'pursuit') {
+    if (!(spec.pursuit.hunters >= 1 && spec.pursuit.hunters <= 5)) fail('pursuit.hunters out of [1, 5]');
+    if (!(spec.pursuit.heat >= 0.5 && spec.pursuit.heat <= 1.5)) fail('pursuit.heat out of [0.5, 1.5]');
+    if (!(spec.pursuit.worldScale >= 0.6 && spec.pursuit.worldScale <= 2)) fail('pursuit.worldScale out of [0.6, 2]');
+  }
   if (!(spec.adventure.worldScale >= 0.6 && spec.adventure.worldScale <= 2)) fail('adventure.worldScale out of [0.6, 2]');
   if (!BIOMES[spec.world.biome]) fail(`unknown biome '${spec.world.biome}' (have: ${Object.keys(BIOMES)})`);
   if (spec.weapon.enabled && !WEAPON_KINDS[spec.weapon.kind]) {

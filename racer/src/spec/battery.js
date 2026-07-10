@@ -95,6 +95,12 @@ export const BATTERY = [
     },
     gates: { minFired: 8, minCarDamaged: 2, minMeanSpeed: 8 },
   },
+  {
+    key: 'bomber-rush',
+    prompt: 'desert race with 8 kamikaze bombers and a blaster',
+    overrides: {},
+    gates: { minFired: 8, minKills: 1, minBomberBoom: 2, wantsKeys: ['F'] },
+  },
   // --- non-circuit archetypes ------------------------------------------------
   {
     key: 'car-soccer-derby',
@@ -128,6 +134,18 @@ export const BATTERY = [
     prompt: 'meadow soccer kickabout, empty pitch',
     overrides: { soccer: { opponents: 0 } },
     gates: { minGoalsTotal: 2 }, // striker gate: nobody to blame on an empty pitch
+  },
+  {
+    key: 'heat-chase',
+    // the compiler has no pursuit keywords yet, so the archetype is pinned by
+    // override; the prompt still exercises the biome table ('night')
+    prompt: 'midnight escape from the heat at night',
+    overrides: {
+      archetype: 'pursuit',
+      pursuit: { hunters: 3 },
+      hud: { elements: ['speed', 'boost', 'health', 'score'] },
+    },
+    gates: { minCarDamaged: 1, minWrecked: 1 },
   },
 ];
 

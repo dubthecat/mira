@@ -16,6 +16,7 @@ import { wrapAngle, clamp } from '../rng.js';
 
 const SUBSTEPS = 3; // world.js steps the mode 3x per 20 Hz action frame
 const KICKOFF_FREEZE_FRAMES = 30; // countdown after build and after each goal
+const NET_DEPTH = 3.2; // metres of net box behind the goal line cars may enter
 
 const BALL = {
   radius: 1.3,
@@ -356,7 +357,22 @@ export class SoccerMode {
   }
 
   decide(world) {
+    if (this.freezeSub > 0) {
+      // kickoff countdown: the player brain is paused exactly like the rival
+      // brains (theirs run in stepBodies, which no-ops while frozen) — no rng
+      // draws, no stuck-counter wind-up from the forced standstill
+      this.playerBrain.stuckFrames = 0;
+      this.playerBrain.recoverFrames = 0;
+      return keysFrom({});
+    }
     return this.playerBrain.decide(world.car, this.ball, this._rivalCars);
+  }
+
+  // world.js gates weapons/damage/pickups on this, giving the kickoff freeze
+  // the exact same semantics as the death freeze for everything the player
+  // could otherwise do or suffer
+  frozen() {
+    return this.freezeSub > 0;
   }
 
   stepAvatar(world, keys, dt) {
@@ -367,37 +383,69 @@ export class SoccerMode {
       return null;
     }
     const q = car.step(keys, dt); // stub track: its wall branch never fires
-    const impact = bounce(
-      car,
-      world.space.constrain(car.x, car.y, car.p.radius),
-      car.p.wallRestitution,
-      car.p.wallTangentKeep,
-    );
+    const impact = this._constrainCar(world, car);
     if (impact > car.wallImpact) car.wallImpact = impact; // WallHit events
     return q;
   }
 
-  postStep(world, keys, dt, frameEvents) {
+  // Arena wall response for a car body. Inside a goal mouth (which the
+  // renderer draws fully OPEN) the closed arena SDF is skipped — bouncing
+  // there would teach the world model collisions with empty air — and a
+  // back-of-net box takes over: side netting at the posts, back panel
+  // NET_DEPTH past the line, so cars can drive into the mouth but never
+  // leave the pitch. Mirrors the ball's mouth exemption, with a closed back.
+  _constrainCar(world, car) {
+    const a = this.arena;
+    const r = car.p.radius;
+    const rest = car.p.wallRestitution;
+    const keep = car.p.wallTangentKeep;
+    const inMouth = Math.abs(car.y) < this.mouthHalf && Math.abs(car.x) > a.halfW - 3;
+    if (!inMouth) {
+      return bounce(car, world.space.constrain(car.x, car.y, r), rest, keep);
+    }
+    let impact = 0;
+    // side netting/posts: only past the wall line, where the skipped SDF
+    // would otherwise let the car slide out of the mouth sideways
+    if (Math.abs(car.x) > a.halfW - r && Math.abs(car.y) > this.mouthHalf - r) {
+      const sy = car.y > 0 ? 1 : -1;
+      impact = Math.max(
+        impact,
+        bounce(car, { x: car.x, y: sy * (this.mouthHalf - r), nx: 0, ny: -sy, hit: true }, rest, keep),
+      );
+    }
+    // back of the net: NET_DEPTH behind the goal line ends the world
+    if (Math.abs(car.x) > a.halfW + NET_DEPTH - r) {
+      const sx = car.x > 0 ? 1 : -1;
+      impact = Math.max(
+        impact,
+        bounce(car, { x: sx * (a.halfW + NET_DEPTH - r), y: car.y, nx: -sx, ny: 0, hit: true }, rest, keep),
+      );
+    }
+    return impact;
+  }
+
+  // Mode bodies: rival cars, ball physics, wall/net bounces, goal checks.
+  // Runs from postStep in live play AND directly from world.js during the
+  // death freeze — a dead player must not stop the ball mid-flight or park
+  // the rivals. keys === null marks the dead-avatar path: the frozen corpse
+  // never kicks the ball and never trades car-vs-car bumps.
+  stepBodies(world, dt, frameEvents, keys = null) {
     if (this.freezeSub > 0) {
+      // kickoff countdown holds every body still (this is the single
+      // per-substep decrement point for both the live and dead paths)
       this.freezeSub--;
       return;
     }
     const car = world.car;
-    world.progress += Math.hypot(car.vx, car.vy) * dt;
 
     // rivals: decisions at 20 Hz (once per action frame), physics per substep
     if (this._decideFrame !== world.frame) {
       this._decideFrame = world.frame;
-      for (const o of this.opponents) o.keys = o.brain.decide(o.car, this.ball, [world.car]);
+      for (const o of this.opponents) o.keys = o.brain.decide(o.car, this.ball, [car]);
     }
     for (const o of this.opponents) {
       o.car.step(o.keys || EMPTY_KEYS, dt);
-      bounce(
-        o.car,
-        world.space.constrain(o.car.x, o.car.y, o.car.p.radius),
-        o.car.p.wallRestitution,
-        o.car.p.wallTangentKeep,
-      );
+      this._constrainCar(world, o.car);
     }
 
     // ball: exponential rolling friction, then integrate
@@ -409,7 +457,7 @@ export class SoccerMode {
     ball.y += ball.vy * dt;
 
     // kicks in fixed order (player first) — the order is part of determinism
-    if (this._kick(car, ball, !!keys.LShiftKey)) ball.lastTouch = 'us';
+    if (keys !== null && this._kick(car, ball, !!keys.LShiftKey)) ball.lastTouch = 'us';
     for (const o of this.opponents) {
       if (this._kick(o.car, ball, !!(o.keys && o.keys.LShiftKey))) ball.lastTouch = 'them';
     }
@@ -435,11 +483,18 @@ export class SoccerMode {
 
     // car-vs-car bumping (equal mass, mild restitution)
     for (let i = 0; i < this.opponents.length; i++) {
-      this._bump(car, this.opponents[i].car);
+      if (keys !== null) this._bump(car, this.opponents[i].car);
       for (let j = i + 1; j < this.opponents.length; j++) {
         this._bump(this.opponents[i].car, this.opponents[j].car);
       }
     }
+  }
+
+  postStep(world, keys, dt, frameEvents) {
+    if (this.freezeSub <= 0) {
+      world.progress += Math.hypot(world.car.vx, world.car.vy) * dt;
+    }
+    this.stepBodies(world, dt, frameEvents, keys);
   }
 
   _kick(car, ball, powerHeld) {
@@ -497,6 +552,15 @@ export class SoccerMode {
     }
   }
 
+  // stuck/recovery/burst state must not carry across the teleport — a brain
+  // mid-recovery at the whistle would open the kickoff reversing at its own
+  // goal (and the freeze itself must never wind the stuck counter up)
+  _resetBrainTimers(brain) {
+    brain.stuckFrames = 0;
+    brain.recoverFrames = 0;
+    brain.burstFrames = 0;
+  }
+
   _kickoffReset(world) {
     const c = world.car;
     c.x = this.kickoffPose.x;
@@ -507,6 +571,7 @@ export class SoccerMode {
     c.steer = 0;
     c.u = 0;
     c.slip = 0;
+    this._resetBrainTimers(this.playerBrain);
     for (const o of this.opponents) {
       o.car.x = o.pose.x;
       o.car.y = o.pose.y;
@@ -517,6 +582,7 @@ export class SoccerMode {
       o.car.u = 0;
       o.car.slip = 0;
       o.keys = null;
+      this._resetBrainTimers(o.brain);
     }
     this.ball.x = 0;
     this.ball.y = 0;
@@ -544,6 +610,12 @@ export class SoccerMode {
       },
       spawnPickup(rng) {
         return space.randomPoint(rng, 5);
+      },
+      // keep ambling monsters on the pitch (same hook as the other arenas)
+      constrainMonster(m) {
+        const r = space.constrain(m.x, m.y, m.cfg.size);
+        m.x = r.x;
+        m.y = r.y;
       },
     };
   }

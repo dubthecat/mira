@@ -487,16 +487,20 @@ export class ShooterMode {
     return res;
   }
 
-  postStep(world, keys, dt, frameEvents) {
-    // wave activation: monsters release themselves via respawnAt; here we
-    // advance the public wave counter and announce it (once per boundary —
-    // the while-loop also catches up across death-freeze gaps)
+  // wave activation: monsters release themselves via respawnAt inside
+  // entities.step, which runs even while the avatar is dead — so the public
+  // wave counter and its WaveStarted event advance here in the unconditional
+  // per-substep tick (world.js calls it regardless of the death freeze),
+  // keeping the event/HUD badge in sync with monsters actually appearing
+  tick(world, dt, frameEvents) {
     const per = this.spec.shooter.waveEveryFrames;
     while (world.wave < this._totalWaves && world.frame >= world.wave * per) {
       world.wave++;
       frameEvents.push({ name: 'WaveStarted', data: { wave: world.wave } });
     }
+  }
 
+  postStep(world, keys, dt, frameEvents) {
     // survival scoring: +10 per second stayed alive, event-free (postStep
     // runs once per substep and only while alive, so gate on the frame index)
     if (world.frame !== this._lastFrame) {
@@ -509,6 +513,12 @@ export class ShooterMode {
   respawnPose(world) {
     // adrenaline refill: without sprint the runner can't break a centre camp
     world.car.boost = Math.max(world.car.boost, 60);
+    // the runner's u is authoritative (stepAvatar recomputes vx/vy from it,
+    // so world.js zeroing vx/vy does nothing here): reset the kinematic and
+    // dodge/sprint state, or the corpse's speed launches the fresh spawn
+    world.car.u = 0;
+    this._dodgeCd = 0;
+    this._sprintLatch = false;
     return { x: 0, y: 0, heading: this._spawnHeading };
   }
 
@@ -550,6 +560,14 @@ export class ShooterMode {
           py1: p1.y,
         };
         // no wallGap: arena monsters never hover over walls
+      },
+      // hard wall: rim lairs sit only 5-8 m inside the walls while the amble
+      // orbit reaches ~11 m, so unconstrained monsters wander through the
+      // walls/pillars the runner bounces off. No rng draws.
+      constrainMonster(m) {
+        const res = space.constrain(m.x, m.y, m.cfg.size);
+        m.x = res.x;
+        m.y = res.y;
       },
       spawnPickup(rng) {
         // rejection-sample away from pillars (bounded, deterministic draws)

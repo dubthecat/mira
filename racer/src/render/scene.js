@@ -44,11 +44,13 @@ function resolvePalette(track, spec) {
 import { buildSoccerScene } from './modes/soccer.js';
 import { buildShooterScene } from './modes/shooter.js';
 import { buildAdventureScene } from './modes/adventure.js';
+import { buildPursuitScene } from './modes/pursuit.js';
 
 const MODE_SCENES = {
   soccer: buildSoccerScene,
   shooter: buildShooterScene,
   adventure: buildAdventureScene,
+  pursuit: buildPursuitScene,
 };
 
 export function createView(world, { width, height }) {
@@ -95,6 +97,14 @@ export function createView(world, { width, height }) {
   const camera = new THREE.PerspectiveCamera(62, width / height, 0.3, 600);
   const camState = { pos: new THREE.Vector3(), fov: 62, initialized: false };
 
+  // paint-flash edge detector: invulnSub grants differ per source (damage 60,
+  // respawn 120 substeps), so the flash is keyed to the RISING EDGE of
+  // invulnSub — a fixed ~9 substeps (~3 frames) after any grant — instead of
+  // proximity to one assumed maximum, which painted respawned cars white for
+  // over a second
+  let invulnPrev = 0;
+  let invulnStart = 0;
+
   function update(world, dt) {
     const c = world.car;
     const keys = world.lastKeys || {};
@@ -119,8 +129,10 @@ export function createView(world, { width, height }) {
     carRig.group.visible = !blinking || world.frame % 6 < 3;
 
     // damage feedback: paint flashes white for the first ~3 frames of invuln
-    const invulnMax = (world.spec?.rules.contactInvulnFrames || 0) * 3;
-    const justHit = (world.invulnSub || 0) > invulnMax - 9 && (world.invulnSub || 0) > 0;
+    const inv = world.invulnSub || 0;
+    if (inv > invulnPrev) invulnStart = inv; // fresh grant (hit or respawn)
+    invulnPrev = inv;
+    const justHit = inv > 0 && invulnStart - inv < 9;
     carRig.paintMat.color.setHex(justHit ? 0xffffff : carRig.paintColor);
 
     // muzzle flash: visible for ~2 frames after each shot (fire cooldown is
@@ -145,6 +157,8 @@ export function createView(world, { width, height }) {
         if (m) particles.burst(m.x, 1.2, m.y, 14, m.cfg.color, 9, 0.7);
       } else if (e.name === 'CarDamaged') {
         particles.burst(c.x, 1.0, c.y, 8, 0xff5533, 7, 0.45);
+      } else if (e.name === 'BomberExploded') {
+        particles.burst(e.data.x, 1.2, e.data.y, 24, 0xffa428, 14, 0.7);
       } else if (e.name === 'Fired') {
         const fx2 = Math.cos(c.heading);
         const fy2 = Math.sin(c.heading);
@@ -730,6 +744,30 @@ function buildEntities(scene, spec, track) {
           g.add(eye);
         }
         rig.monsters.push({ group: g, mat, baseColor });
+      } else if (group.type === 'bomber') {
+        baseColor = group.color !== undefined ? group.color : 0xd9a21b;
+        const mat = new THREE.MeshLambertMaterial({ color: baseColor });
+        const body = new THREE.Mesh(new THREE.SphereGeometry(1.35 * scale, 10, 8), mat);
+        body.position.y = 1.15 * scale;
+        g.add(body);
+        // spike ring around the equator (cones pre-rotated to point +X, then
+        // yawed around the body — reads as a naval mine)
+        const spikeGeo = new THREE.ConeGeometry(0.22 * scale, 0.85 * scale, 5);
+        spikeGeo.rotateZ(-Math.PI / 2);
+        const spikeMat = new THREE.MeshLambertMaterial({ color: 0x2b2b31 });
+        for (let k = 0; k < 8; k++) {
+          const a = (k / 8) * Math.PI * 2;
+          const spike = new THREE.Mesh(spikeGeo, spikeMat);
+          spike.position.set(Math.cos(a) * 1.45 * scale, 1.15 * scale, Math.sin(a) * 1.45 * scale);
+          spike.rotation.y = -a;
+          g.add(spike);
+        }
+        // blinking core: material color swapped from update (hitFlash pattern)
+        const coreMat = new THREE.MeshBasicMaterial({ color: 0x5a1408 });
+        const core = new THREE.Mesh(new THREE.SphereGeometry(0.5 * scale, 8, 6), coreMat);
+        core.position.y = 2.35 * scale;
+        g.add(core);
+        rig.monsters.push({ group: g, mat, baseColor, coreMat });
       } else {
         // turret
         baseColor = group.color !== undefined ? group.color : 0xb8443c;
@@ -814,6 +852,17 @@ function updateEntities(rig, world) {
       // crossing the wall line so they float over the barrier, not through it
       const hover = Math.max(0, 1 - (m.wallGap ?? 99) / 2.2);
       r.group.position.y = 0.15 * Math.sin(world.frame * 0.35 + m.phase) + 1.5 * hover;
+    } else if (m.type === 'bomber') {
+      const hover = Math.max(0, 1 - (m.wallGap ?? 99) / 2.2);
+      r.group.position.y = 0.12 * Math.sin(world.frame * 0.3 + m.phase) + 1.5 * hover;
+      // fuse blink: dim when unarmed, then red pulses that quicken as the
+      // fuse burns down (period from ~12 frames to 2 as fuseFrac -> 0)
+      let hot = false;
+      if (m.fuse >= 0) {
+        const period = 2 + Math.round(10 * (m.fuseFrac || 0));
+        hot = world.frame % period < Math.max(1, period >> 1);
+      }
+      r.coreMat.color.setHex(hot ? 0xff2a1a : 0x5a1408);
     }
     r.mat.color.setHex(m.hitFlash > 0 ? 0xffffff : r.baseColor);
   }

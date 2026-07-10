@@ -39,14 +39,23 @@ export function buildTrack(seedRng, opts = {}) {
     const rng = seedRng.fork(attempt === 0 ? 'track' : `track-retry${attempt}`);
     const track = generateCandidate(rng, opts);
     if (track !== null) return track;
-    if (attempt > 60) throw new Error('track generation failed to converge');
+    // Cap high: wide tracks reject often, and unlucky (seed, spec) pairs have
+    // needed 77+ attempts. Raising this is replay-safe — attempts keep their
+    // fork tags, so every previously-converging pair yields the same track.
+    if (attempt > 300) throw new Error('track generation failed to converge');
   }
 }
 
 function generateCandidate(rng, { radiusScale = 1, widthScale = 1, boostPads = true } = {}) {
   // --- control polygon: sorted angles + bounded radius jitter => simple polygon
   const K = rng.int(9, 13);
-  const baseR = rng.range(85, 140) * radiusScale;
+  // wide corridors need proportionally larger geometry: the overlap rejection
+  // threshold below scales with widthScale, so without this the annulus stays
+  // fixed and wide specs (widthScale up to the schema-legal 1.8) reject nearly
+  // every candidate and fail to converge. widthScale <= 1 multiplies by
+  // exactly 1, keeping every existing narrow/default track bit-identical.
+  const widthGrow = 1 + Math.max(0, widthScale - 1) * 0.9;
+  const baseR = rng.range(85, 140) * radiusScale * widthGrow;
   const ctrl = [];
   // half the tracks run clockwise (mirror), so left/right turns are balanced
   // across the dataset
@@ -160,7 +169,13 @@ function generateCandidate(rng, { radiusScale = 1, widthScale = 1, boostPads = t
   // reject candidates where two far-apart sections of road come too close
   // (overlapping corridors: double walls, ambiguous nearest-centerline)
   {
-    const MIN_ARC = 25; // metres of arc separation before clearance applies
+    // metres of arc separation before clearance applies. Must scale with the
+    // corridor width: euclidean distance can never exceed arc distance, so a
+    // fixed window smaller than the clearance 'need' (up to ~2*hw+3, i.e.
+    // ~39 m at widthScale 1.8) makes every wide sample "overlap" its own
+    // road continuation just past the window and rejects 100% of candidates.
+    // widthScale <= 1 multiplies by exactly 1: existing tracks bit-identical.
+    const MIN_ARC = 25 * widthGrow;
     const arcSamples = Math.ceil(MIN_ARC / ds);
     for (let i = 0; i < N; i += 2) {
       for (let j = i + arcSamples; j < N; j += 2) {

@@ -85,6 +85,12 @@ const CASES = [
     prompt: 'just vibes',
     expect: { biome: 'meadow', monsters: {}, weapon: null, hud: ['speed', 'boost'] },
   },
+  {
+    prompt: 'desert race with 8 kamikaze bombers and a blaster',
+    expect: { biome: 'desert', monsters: { bomber: 8 }, weapon: 'blaster',
+              hud: ['speed', 'boost', 'health', 'ammo', 'score', 'lap'],
+              pickups: { health: 3, ammo: 4 } },
+  },
   // --- archetype keywords (soccer / shooter / adventure; default circuit)
   {
     prompt: 'fifa',

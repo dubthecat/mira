@@ -99,24 +99,48 @@ for (const entry of battery) {
       if (!cond) problems.push(msg);
     };
     // count gates are calibrated as totals over SEEDS x 2400-frame episodes;
-    // scale for shorter runs (same pattern for laps, goals, waves, relics)
-    const scaled = (base) => Math.max(1, Math.floor(base * SEEDS * (FRAMES / 2400)));
+    // scale for shorter runs (same pattern for laps, goals, waves, relics).
+    // Demands grow linearly in FRAMES but must never exceed what the spec can
+    // actually supply (waves are capped by monsters/waveSize and the wave
+    // clock, relics never respawn), and rate gates whose scaled demand rounds
+    // to zero are skipped rather than floored to 1 — a 30 s episode cannot be
+    // required to finish a full lap.
+    const scaledRaw = (base) => Math.floor(base * SEEDS * (FRAMES / 2400));
+    const scaled = (base) => Math.max(1, scaledRaw(base));
     if (gates.minMeanSpeed) check(agg.meanSpeed >= gates.minMeanSpeed, `meanSpeed ${agg.meanSpeed.toFixed(1)} < ${gates.minMeanSpeed}`);
-    if (gates.minLaps) {
-      const want = scaled(gates.minLaps);
+    if (gates.minLaps && scaledRaw(gates.minLaps) >= 1) {
+      const want = scaledRaw(gates.minLaps);
       check(agg.laps >= want, `laps ${agg.laps} < ${want}`);
     }
-    if (gates.minGoalsTotal) {
-      const want = scaled(gates.minGoalsTotal);
+    if (gates.minGoalsTotal && scaledRaw(gates.minGoalsTotal) >= 1) {
+      const want = scaledRaw(gates.minGoalsTotal);
       check((c.GoalScored || 0) >= want, `GoalScored ${c.GoalScored || 0} < ${want}`);
     }
     if (gates.minWaves) {
-      const want = scaled(gates.minWaves);
+      // supply cap: ceil(monsters/waveSize) waves exist per episode, and only
+      // floor(FRAMES/waveEveryFrames)+1 wave boundaries fit inside the run
+      const totalMonsters = spec.entities.monsters.reduce((a, m) => a + m.count, 0);
+      const supply =
+        SEEDS *
+        Math.min(
+          Math.ceil(totalMonsters / spec.shooter.waveSize),
+          Math.floor(FRAMES / spec.shooter.waveEveryFrames) + 1,
+        );
+      const want = Math.min(scaled(gates.minWaves), supply);
       check((c.WaveStarted || 0) >= want, `WaveStarted ${c.WaveStarted || 0} < ${want}`);
     }
     if (gates.minRelics) {
-      const want = scaled(gates.minRelics);
+      // supply cap: relics never respawn — spec.adventure.relics per episode
+      const want = Math.min(scaled(gates.minRelics), SEEDS * spec.adventure.relics);
       check((c.RelicCollected || 0) >= want, `RelicCollected ${c.RelicCollected || 0} < ${want}`);
+    }
+    if (gates.minBomberBoom) {
+      const want = scaled(gates.minBomberBoom);
+      check((c.BomberExploded || 0) >= want, `BomberExploded ${c.BomberExploded || 0} < ${want}`);
+    }
+    if (gates.minWrecked) {
+      const want = scaled(gates.minWrecked);
+      check((c.HunterWrecked || 0) >= want, `HunterWrecked ${c.HunterWrecked || 0} < ${want}`);
     }
     if (gates.minFired) check((c.Fired || 0) >= gates.minFired, `Fired ${c.Fired || 0} < ${gates.minFired}`);
     if (gates.minKills) check((c.MonsterKilled || 0) >= gates.minKills, `kills ${c.MonsterKilled || 0} < ${gates.minKills}`);

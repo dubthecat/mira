@@ -515,6 +515,14 @@ export class AdventureMode {
           1.2,
         );
       },
+      // hard wall: guard lairs sit 4-10 m from POI centres while the amble
+      // orbit reaches ~11 m, so unconstrained guards sink into the solid
+      // structures the car collides with. No rng draws.
+      constrainMonster(m) {
+        const res = field.constrain(m.x, m.y, m.cfg.size);
+        m.x = res.x;
+        m.y = res.y;
+      },
       // no wallGap: open terrain has no wall line for chasers to hover
     };
   }

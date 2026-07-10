@@ -33,6 +33,7 @@ export const KEYWORDS = {
     patroller: ['patrol', 'patrols', 'patrolling', 'patroller', 'patrollers', 'guard', 'guards', 'beetle', 'beetles'],
     // singular 'shooter' is an archetype word now; plural still means turrets
     turret: ['turret', 'turrets', 'tower', 'towers', 'cannon', 'cannons', 'shooters'],
+    bomber: ['bomber', 'bombers', 'kamikaze', 'exploding'],
   },
   weapon: {
     blaster: ['gun', 'guns', 'blaster', 'blasters', 'laser', 'lasers', 'shoot', 'shoots', 'shooting', 'weapon', 'weapons', 'cannon', 'cannons'],
@@ -267,7 +268,9 @@ function extract(prompt) {
     pickups.push({ kind: 'ammo', count: 4 });
   }
   if (hasAny(KEYWORDS.hud.race) && archetype === 'circuit') wants.add('lap');
-  if (hasAny(KEYWORDS.hud.minimap)) wants.add('minimap');
+  // like 'lap', the minimap is circuit-only: no other mode builds a track
+  // with .xs to feed it, so elsewhere it renders as a permanently dead box
+  if (hasAny(KEYWORDS.hud.minimap) && archetype === 'circuit') wants.add('minimap');
   if (pickups.length) kw.entities.pickups = pickups;
   const clean = hasAny(KEYWORDS.hud.clean) || text.includes(' no hud ');
   kw.hud.elements = clean ? [] : HUD_ORDER.filter((el) => wants.has(el));
@@ -281,6 +284,7 @@ function extract(prompt) {
 function fillRolledArchetype(spec) {
   const wants = new Set(spec.hud.elements);
   wants.delete('lap');
+  wants.delete('minimap'); // circuit-only, like 'lap' (no track => dead box)
   if (spec.archetype === 'shooter') {
     spec.weapon.enabled = true;
     if (spec.entities.monsters.length === 0) spec.entities.monsters = [{ type: 'chaser', count: 12 }];

@@ -22,12 +22,14 @@ import { CircuitMode } from './circuit.js';
 import { SoccerMode } from './soccer.js';
 import { ShooterMode } from './shooter.js';
 import { AdventureMode } from './adventure.js';
+import { PursuitMode } from './pursuit.js';
 
 const REGISTRY = {
   circuit: CircuitMode,
   soccer: SoccerMode,
   shooter: ShooterMode,
   adventure: AdventureMode,
+  pursuit: PursuitMode,
 };
 
 export function createMode(spec) {

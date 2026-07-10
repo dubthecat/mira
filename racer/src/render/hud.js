@@ -427,8 +427,14 @@ export function createHud(spec, { width, height }) {
     trackMesh.name = 'mmTrack';
     scene.add(trackMesh);
 
+    // tick/car start hidden (like the dots): they only have meaningful
+    // positions once rebuildMinimap has run, and trackless modes (soccer /
+    // shooter / adventure / pursuit stubs without .xs) never run it — visible
+    // defaults would bake stray pixels at screen (0,0) into every frame
     const tick = quad(tickMat, centerGeo, 0, 0, 2 * s, 9 * s, 3, 'mmTick');
+    tick.visible = false;
     const car = quad(whiteMat, centerGeo, 0, 0, 5 * s, 5 * s, 5, 'mmCar');
+    car.visible = false;
     let nDots = 0;
     const monsterSpecs = (spec.entities && spec.entities.monsters) || EMPTY;
     for (const m of monsterSpecs) nDots += m.count || 0;
@@ -513,6 +519,7 @@ export function createHud(spec, { width, height }) {
     mm.posAttr.needsUpdate = true;
 
     // start-line tick at sample 0, laid across the track direction
+    mm.tick.visible = true;
     mm.tick.position.set(mm.sx[0], mm.sy[0], 0);
     mm.tick.rotation.z = Math.atan2(mm.sy[1] - mm.sy[0], mm.sx[1] - mm.sx[0]);
   }
@@ -600,6 +607,7 @@ export function createHud(spec, { width, height }) {
       const track = world.track;
       if (track && track.xs && track !== mm.trackRef) rebuildMinimap(track);
       if (mm.trackRef) {
+        mm.car.visible = true;
         mmSetDot(mm.car, car.x, car.y);
         const monsters = (world.entities && world.entities.monsters) || EMPTY;
         for (let i = 0; i < mm.dots.length; i++) {
