@@ -51,6 +51,10 @@ export const MONSTER_TYPES = {
   // static turret lobbing slow projectiles the car must dodge
   turret: { speed: 0, size: 2.2, health: 4, damage: 22, aggroRadius: 70, color: 0xb8443c,
             fireEvery: 2.0, projSpeed: 22 },
+  // kamikaze: seeks the car, arms a short fuse up close, explodes for
+  // distance-scaled area damage (shot bombers detonate instantly)
+  bomber: { speed: 10, size: 1.8, health: 1, damage: 30, aggroRadius: 55, color: 0xd9a21b,
+            fuseSec: 1.4, blastRadius: 7 },
 };
 
 export const WEAPON_KINDS = {
@@ -60,10 +64,30 @@ export const WEAPON_KINDS = {
 
 export const BASE_KEYS = ['W', 'S', 'A', 'D', 'Space', 'LShiftKey'];
 
+export const ARCHETYPES = ['circuit', 'soccer', 'shooter', 'adventure', 'pursuit'];
+
 export const DEFAULT_SPEC = {
   name: 'racing-classic',
   prompt: '',
-  version: 1,
+  version: 2,
+  // what KIND of game this is; each archetype is a mode module (src/sim/modes)
+  // sharing the same avatar physics, entities, recorder and dataset contract
+  archetype: 'circuit',
+  // archetype-specific knobs (only the active archetype's block is read)
+  soccer: {
+    opponents: 1, // 0..2 rival cars chasing the ball
+    pitchScale: 1.0,
+  },
+  shooter: {
+    waveSize: 4, // monsters per wave
+    waveEveryFrames: 360, // 18 s between waves
+    arenaScale: 1.0,
+  },
+  adventure: {
+    relics: 6,
+    worldScale: 1.0, // multiplies the open-terrain extent
+    onFoot: false, // true = runner avatar instead of the car
+  },
   world: {
     biome: 'meadow',
     // multipliers over the procedural track generator's built-in ranges
@@ -120,8 +144,22 @@ export function actionKeysFor(spec) {
   return spec.weapon.enabled ? [...BASE_KEYS, 'F'] : [...BASE_KEYS];
 }
 
+// Archetype-gated knob blocks: kept OUT of DEFAULT_SPEC so adding a new
+// archetype never changes the JSON (and therefore the specHash world-seed)
+// of existing specs. Injected only when the archetype is active.
+export const PURSUIT_DEFAULTS = {
+  hunters: 3, // 1..5 chase cars hunting the player
+  heat: 1.0, // hunter speed multiplier (difficulty)
+  worldScale: 1.0,
+};
+
 export function makeSpec(overrides = {}) {
   const spec = merge(DEFAULT_SPEC, overrides);
+  if (spec.archetype === 'pursuit') {
+    spec.pursuit = merge(PURSUIT_DEFAULTS, spec.pursuit || {});
+  } else {
+    delete spec.pursuit;
+  }
   validateSpec(spec);
   return spec;
 }
@@ -130,6 +168,21 @@ export function validateSpec(spec) {
   const fail = (msg) => {
     throw new Error(`invalid GameSpec: ${msg}`);
   };
+  if (!ARCHETYPES.includes(spec.archetype)) {
+    fail(`unknown archetype '${spec.archetype}' (have: ${ARCHETYPES})`);
+  }
+  if (!(spec.soccer.opponents >= 0 && spec.soccer.opponents <= 2)) fail('soccer.opponents out of [0, 2]');
+  if (!(spec.soccer.pitchScale >= 0.7 && spec.soccer.pitchScale <= 1.6)) fail('soccer.pitchScale out of [0.7, 1.6]');
+  if (!(spec.shooter.waveSize >= 1 && spec.shooter.waveSize <= 12)) fail('shooter.waveSize out of [1, 12]');
+  if (!(spec.shooter.waveEveryFrames >= 100 && spec.shooter.waveEveryFrames <= 2400)) fail('shooter.waveEveryFrames out of [100, 2400]');
+  if (!(spec.shooter.arenaScale >= 0.7 && spec.shooter.arenaScale <= 1.8)) fail('shooter.arenaScale out of [0.7, 1.8]');
+  if (!(spec.adventure.relics >= 2 && spec.adventure.relics <= 14)) fail('adventure.relics out of [2, 14]');
+  if (spec.archetype === 'pursuit') {
+    if (!(spec.pursuit.hunters >= 1 && spec.pursuit.hunters <= 5)) fail('pursuit.hunters out of [1, 5]');
+    if (!(spec.pursuit.heat >= 0.5 && spec.pursuit.heat <= 1.5)) fail('pursuit.heat out of [0.5, 1.5]');
+    if (!(spec.pursuit.worldScale >= 0.6 && spec.pursuit.worldScale <= 2)) fail('pursuit.worldScale out of [0.6, 2]');
+  }
+  if (!(spec.adventure.worldScale >= 0.6 && spec.adventure.worldScale <= 2)) fail('adventure.worldScale out of [0.6, 2]');
   if (!BIOMES[spec.world.biome]) fail(`unknown biome '${spec.world.biome}' (have: ${Object.keys(BIOMES)})`);
   if (spec.weapon.enabled && !WEAPON_KINDS[spec.weapon.kind]) {
     fail(`unknown weapon kind '${spec.weapon.kind}' (have: ${Object.keys(WEAPON_KINDS)})`);
@@ -147,7 +200,7 @@ export function validateSpec(spec) {
     if (!(p.count >= 0 && p.count <= 40)) fail(`pickup count out of range: ${p.count}`);
   }
   for (const el of spec.hud.elements) {
-    if (!['speed', 'boost', 'health', 'ammo', 'score', 'lap', 'minimap'].includes(el)) {
+    if (!['speed', 'boost', 'health', 'ammo', 'score', 'lap', 'minimap', 'match', 'objective', 'wave'].includes(el)) {
       fail(`unknown hud element '${el}'`);
     }
   }

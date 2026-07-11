@@ -27,10 +27,20 @@ const MM_MAX_DOTS = 64;
 
 // --- glyph atlas ------------------------------------------------------------
 
+// 8x4 keeps every cell edge a dyadic rational (k/8, k/4) so the Float32 uv
+// attribute holds them exactly — the test suite's UV decoder relies on that
 const ATLAS_COLS = 8;
-const ATLAS_ROWS = 2;
+const ATLAS_ROWS = 4;
 const CELL = 64;
-const GLYPH_ORDER = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'L', 'x', 'kmh', 'heart', 'ammo'];
+const GLYPH_ORDER = [
+  '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'L', 'x', 'kmh', 'heart', 'ammo',
+  'gem', 'W', 'A', 'V', 'E',
+];
+
+// smallest signed representation of an angle, (-pi, pi]
+function wrapAngle(a) {
+  return Math.atan2(Math.sin(a), Math.cos(a));
+}
 
 function drawGlyph(ctx, name, x, y) {
   const cx = x + CELL / 2;
@@ -61,6 +71,25 @@ function drawGlyph(ctx, name, x, y) {
     ctx.stroke();
     ctx.fillStyle = '#ffd11a';
     ctx.fill();
+  } else if (name === 'gem') {
+    // relic gem: faceted diamond with a girdle line
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - 24);
+    ctx.lineTo(cx + 17, cy);
+    ctx.lineTo(cx, cy + 24);
+    ctx.lineTo(cx - 17, cy);
+    ctx.closePath();
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 7;
+    ctx.stroke();
+    ctx.fillStyle = '#3ae8c8';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(cx - 17, cy);
+    ctx.lineTo(cx + 17, cy);
+    ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+    ctx.lineWidth = 3;
+    ctx.stroke();
   } else {
     const text = name === 'kmh' ? 'km/h' : name;
     ctx.font = name === 'kmh' ? 'bold 26px monospace' : 'bold 52px monospace';
@@ -133,6 +162,8 @@ export function createHud(spec, { width, height }) {
   const whiteMat = mat({ color: 0xf2f2f6 });
   const redDotMat = mat({ color: 0xff3b30 });
   const tickMat = mat({ color: 0xffe14a });
+  const matchUsMat = mat({ color: 0x1f4fa8, transparent: true, opacity: 0.8 }); // blue-tinted chip
+  const matchThemMat = mat({ color: 0xa8681f, transparent: true, opacity: 0.8 }); // amber-tinted chip
 
   // shared unit quad with origin at its bottom-left corner: fills anchor left
   // (scale.x grows rightward), bars/frames position by corner
@@ -269,11 +300,16 @@ export function createHud(spec, { width, height }) {
     score = { slots };
   }
 
+  // top-center rows stack downward (lap, match, objective, wave). Each mode's
+  // spec uses one of these in practice, but combined specs must still lay out
+  // without overlap; ctrTop is the top edge available to the next row.
+  let ctrTop = height - 8 * s;
+
   // top-center: "L<n>" + lap pips beneath
   let lap = null;
   if (elements.has('lap')) {
     const dw = 14 * s;
-    const y = height - 28 * s;
+    const y = ctrTop - 20 * s;
     const x0 = width / 2 - 1.5 * dw;
     const l = glyphSlot(x0, y, dw, 20 * s);
     setGlyph(l, 'L');
@@ -282,9 +318,83 @@ export function createHud(spec, { width, height }) {
     const pw = 6 * s;
     const px0 = width / 2 - (LAP_PIPS * pw + (LAP_PIPS - 1) * 3 * s) / 2;
     for (let i = 0; i < LAP_PIPS; i++) {
-      pips.push(quad(pipOffMat, unitGeo, px0 + i * (pw + 3 * s), height - 38 * s, pw, pw, 3));
+      pips.push(quad(pipOffMat, unitGeo, px0 + i * (pw + 3 * s), ctrTop - 30 * s, pw, pw, 3));
     }
     lap = { slots, pips };
+    ctrTop -= 34 * s; // glyph row (20) + pips (10) + gap (4)
+  }
+
+  // top-center: match scoreboard — blue "us" chip, dash, amber "them" chip,
+  // two zero-padded digits per side (setNumber caps 2 slots at 99)
+  let match = null;
+  if (elements.has('match')) {
+    const chipW = 36 * s;
+    const chipH = 24 * s;
+    const y0 = ctrTop - chipH;
+    const dw = 14 * s;
+    const usX = width / 2 - 8 * s - chipW;
+    const themX = width / 2 + 8 * s;
+    quad(matchUsMat, unitGeo, usX, y0, chipW, chipH, 1, 'matchUsChip');
+    quad(matchThemMat, unitGeo, themX, y0, chipW, chipH, 1, 'matchThemChip');
+    quad(whiteMat, unitGeo, width / 2 - 5 * s, y0 + chipH / 2 - 1.5 * s, 10 * s, 3 * s, 3, 'matchDash');
+    const us = [glyphSlot(usX + 4 * s, y0 + 2 * s, dw, 20 * s), glyphSlot(usX + 4 * s + dw, y0 + 2 * s, dw, 20 * s)];
+    const them = [glyphSlot(themX + 4 * s, y0 + 2 * s, dw, 20 * s), glyphSlot(themX + 4 * s + dw, y0 + 2 * s, dw, 20 * s)];
+    match = { us, them };
+    ctrTop = y0 - 4 * s;
+  }
+
+  // top-center: gem icon + "n/m" relic counter + a direction arrow that
+  // rotates toward the objective target relative to the avatar's heading
+  let objective = null;
+  if (elements.has('objective')) {
+    const dw = 14 * s;
+    const y = ctrTop - 20 * s;
+    const cx = width / 2;
+    const icon = glyphSlot(cx - 44 * s, y, 16 * s, 20 * s, 'objGem');
+    setGlyph(icon, 'gem');
+    const n = [glyphSlot(cx - 26 * s, y, dw, 20 * s), glyphSlot(cx - 26 * s + dw, y, dw, 20 * s)];
+    const slash = quad(whiteMat, centerGeo, cx + 2 * s, y + 10 * s, 3 * s, 18 * s, 3, 'objSlash');
+    slash.rotation.z = -0.32;
+    const m = [glyphSlot(cx + 8 * s, y, dw, 20 * s), glyphSlot(cx + 8 * s + dw, y, dw, 20 * s)];
+    // arrow: a triangle mesh pointing +y (screen up) at rotation 0; update()
+    // only rotates it — the atlas is never redrawn
+    const tri = new THREE.BufferGeometry();
+    tri.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
+      0, 0.62, 0, -0.46, -0.5, 0, 0.46, -0.5, 0,
+    ]), 3));
+    geometries.push(tri);
+    const arrow = new THREE.Mesh(tri, tickMat);
+    arrow.position.set(cx + 46 * s, y + 10 * s, 0);
+    arrow.scale.set(13 * s, 13 * s, 1);
+    arrow.renderOrder = 5;
+    arrow.frustumCulled = false;
+    arrow.name = 'objArrow';
+    scene.add(arrow);
+    objective = { icon, n, slash, m, arrow };
+    ctrTop = y - 4 * s;
+  }
+
+  // top-center: "WAVE n" badge (letter glyphs + 2 digits over a frame chip)
+  let wave = null;
+  if (elements.has('wave')) {
+    const y = ctrTop - 20 * s;
+    const lw = 13 * s;
+    const dw = 14 * s;
+    const x0 = width / 2 - 42 * s;
+    const chip = quad(frameMat, unitGeo, x0 - 5 * s, y - 2 * s, 94 * s, 24 * s, 1, 'waveChip');
+    const letters = [];
+    const word = ['W', 'A', 'V', 'E'];
+    for (let i = 0; i < word.length; i++) {
+      const l = glyphSlot(x0 + i * lw, y, lw, 20 * s);
+      setGlyph(l, word[i]);
+      letters.push(l);
+    }
+    const slots = [
+      glyphSlot(x0 + 4 * lw + 4 * s, y, dw, 20 * s),
+      glyphSlot(x0 + 4 * lw + 4 * s + dw, y, dw, 20 * s),
+    ];
+    wave = { chip, letters, slots };
+    ctrTop = y - 4 * s;
   }
 
   // minimap: ~70px box, top-right unless score claims that corner, then
@@ -317,8 +427,14 @@ export function createHud(spec, { width, height }) {
     trackMesh.name = 'mmTrack';
     scene.add(trackMesh);
 
+    // tick/car start hidden (like the dots): they only have meaningful
+    // positions once rebuildMinimap has run, and trackless modes (soccer /
+    // shooter / adventure / pursuit stubs without .xs) never run it — visible
+    // defaults would bake stray pixels at screen (0,0) into every frame
     const tick = quad(tickMat, centerGeo, 0, 0, 2 * s, 9 * s, 3, 'mmTick');
+    tick.visible = false;
     const car = quad(whiteMat, centerGeo, 0, 0, 5 * s, 5 * s, 5, 'mmCar');
+    car.visible = false;
     let nDots = 0;
     const monsterSpecs = (spec.entities && spec.entities.monsters) || EMPTY;
     for (const m of monsterSpecs) nDots += m.count || 0;
@@ -403,6 +519,7 @@ export function createHud(spec, { width, height }) {
     mm.posAttr.needsUpdate = true;
 
     // start-line tick at sample 0, laid across the track direction
+    mm.tick.visible = true;
     mm.tick.position.set(mm.sx[0], mm.sy[0], 0);
     mm.tick.rotation.z = Math.atan2(mm.sy[1] - mm.sy[0], mm.sx[1] - mm.sx[0]);
   }
@@ -453,10 +570,44 @@ export function createHud(spec, { width, height }) {
         lap.pips[i].material = i < lit ? pipOnMat : pipOffMat;
       }
     }
+    if (match) {
+      const ms = world.matchScore; // soccer mode; undefined reads as 0-0
+      setNumber(match.us, ms ? ms.us : 0, true);
+      setNumber(match.them, ms ? ms.them : 0, true);
+    }
+    if (objective) {
+      const o = world.objective; // adventure mode; undefined hides the element
+      const vis = o !== undefined && o !== null;
+      objective.icon.visible = vis;
+      objective.slash.visible = vis;
+      objective.arrow.visible = vis;
+      if (vis) {
+        setNumber(objective.n, o.collected, false);
+        setNumber(objective.m, o.total, false);
+        // screen-space bearing to the target: 0 = dead ahead. The camera's up
+        // is world +Y and sim y maps to 3D z, so a positive relative bearing
+        // is screen-RIGHT — which is a NEGATIVE rotation of the up-pointing
+        // triangle in the y-up ortho HUD.
+        const a = wrapAngle(Math.atan2(o.targetY - car.y, o.targetX - car.x) - car.heading);
+        objective.arrow.rotation.z = -a;
+      } else {
+        for (let i = 0; i < objective.n.length; i++) objective.n[i].visible = false;
+        for (let i = 0; i < objective.m.length; i++) objective.m[i].visible = false;
+      }
+    }
+    if (wave) {
+      const n = world.wave; // shooter mode; wave 0 (pre-first-wave) stays hidden
+      const vis = n !== undefined && n > 0;
+      wave.chip.visible = vis;
+      for (let i = 0; i < wave.letters.length; i++) wave.letters[i].visible = vis;
+      if (vis) setNumber(wave.slots, n, false);
+      else for (let i = 0; i < wave.slots.length; i++) wave.slots[i].visible = false;
+    }
     if (mm) {
       const track = world.track;
       if (track && track.xs && track !== mm.trackRef) rebuildMinimap(track);
       if (mm.trackRef) {
+        mm.car.visible = true;
         mmSetDot(mm.car, car.x, car.y);
         const monsters = (world.entities && world.entities.monsters) || EMPTY;
         for (let i = 0; i < mm.dots.length; i++) {

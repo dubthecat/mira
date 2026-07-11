@@ -1,6 +1,6 @@
-# MIRA web — the public face + online play surface
+# PredictExpert Game Engine — web (public face + online play surface)
 
-A Next.js (App Router, plain JS) site for the MIRA neural game engine:
+A Next.js (App Router, plain JS) site for the PredictExpert Game Engine:
 
 - `/` — landing page. One prompt box ("Build a game"), the pipeline diagram
   (prompt → GameSpec → procedural game → dataset → RAE codec → diffusion world
@@ -103,3 +103,26 @@ lib/engine/
   localSim.js          LocalSimEngine (implemented, wraps racer's World)
   neuralStream.js      NeuralStreamEngine (stub: throws 'not yet trained')
 ```
+
+## Deploying on Vercel
+
+The app is fully static + client-side (no API routes, no server secrets) —
+**no environment variables are required**.
+
+Project settings (dashboard → Import `dubthecat/mira`):
+
+| setting | value |
+|---|---|
+| Root Directory | `web` |
+| "Include source files outside of the Root Directory" | **enabled** (the build imports `../racer/src`) |
+| Framework preset | Next.js (auto-detected) |
+| Production branch | `racer-pipeline` (until merged to `main`) |
+| Environment variables | none |
+
+Never add the pipeline secrets (HF/RunPod/Replicate keys) to Vercel — the
+site doesn't use them, and anything prefixed `NEXT_PUBLIC_` ships to every
+visitor's browser.
+
+Future env (when the neural engine goes live): `NEXT_PUBLIC_NEURAL_WS_URL` —
+the WebSocket endpoint of the GPU inference server that NeuralStreamEngine
+connects to (see `lib/engine/neuralStream.js`).

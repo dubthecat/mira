@@ -47,7 +47,7 @@ function reset(newSeed) {
   world = new World(seed, spec);
   if (hud) hud.dispose();
   if (view) view.dispose();
-  view = createView(world.track, { width: innerWidth, height: innerHeight, spec });
+  view = createView(world, { width: innerWidth, height: innerHeight });
   hud = createHud(spec, { width: innerWidth, height: innerHeight });
   view.camera.aspect = innerWidth / innerHeight;
   view.camera.updateProjectionMatrix();
@@ -120,8 +120,13 @@ function tick(now) {
 
   const c = world.car;
   const combat = world.spec.entities.monsters.length > 0 || world.spec.weapon.enabled;
+  const modeBit =
+    world.matchScore ? ` · ${world.matchScore.us}-${world.matchScore.them}` :
+    world.objective ? ` · relics ${world.objective.collected}/${world.objective.total}` :
+    world.wave !== undefined ? ` · wave ${world.wave}` :
+    world.lap !== undefined ? ` · lap ${world.lap + 1}` : '';
   hudDiv.innerHTML =
-    `${Math.round(Math.abs(c.u) * 3.6)} km/h · lap ${world.lap + 1} · seed ${seed} · ${spec.name}` +
+    `${Math.round(Math.abs(c.u) * 3.6)} km/h${modeBit} · seed ${seed} · ${spec.name}` +
     (combat ? ` · hp ${world.health} · ammo ${world.ammo} · score ${world.score}` : '') +
     (botMode ? ' · BOT' : '') +
     boostFillHtml.replace('{W}', String(Math.round(c.boost)));

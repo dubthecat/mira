@@ -14,7 +14,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata = {
-  title: 'MIRA — prompt → game',
+  title: 'PredictExpert Game Engine — prompt → game',
   description:
     'A neural game engine: prompts compile to playable games today on a deterministic Three.js sim, and soon render frame-by-frame from a latent diffusion world model.',
 };

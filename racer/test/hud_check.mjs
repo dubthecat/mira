@@ -105,14 +105,19 @@ const byName = (scene, name) => meshes(scene).filter((m) => m.name === name);
 const approx = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
 
 // --- glyph atlas UV decode ----------------------------------------------------
-// Mirror of hud.js's atlas layout (8x2 grid, glyphs laid out row-major in this
-// order). setGlyph writes each slot's uv attribute as TL,TR,BL,BR with
-// u0=col/8, u1=(col+1)/8, v1=1-row/2, v0=1-(row+1)/2 — so a slot's uv rect maps
-// back to exactly one atlas cell. A never-set slot keeps PlaneGeometry's
-// default full-[0,1] uvs, which decode to null (cell width mismatch).
-const ATLAS_GLYPHS = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'L', 'x', 'kmh', 'heart', 'ammo'];
+// Mirror of hud.js's atlas layout (8x4 grid, glyphs laid out row-major in this
+// order; rows 3+ are spare). setGlyph writes each slot's uv attribute as
+// TL,TR,BL,BR with u0=col/8, u1=(col+1)/8, v1=1-row/4, v0=1-(row+1)/4 — so a
+// slot's uv rect maps back to exactly one atlas cell (all edges are dyadic
+// rationals, exact in the Float32 uv attribute). A never-set slot keeps
+// PlaneGeometry's default full-[0,1] uvs, which decode to null (cell width
+// mismatch).
+const ATLAS_GLYPHS = [
+  '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'L', 'x', 'kmh', 'heart', 'ammo',
+  'gem', 'W', 'A', 'V', 'E',
+];
 const ATLAS_COLS = 8;
-const ATLAS_ROWS = 2;
+const ATLAS_ROWS = 4;
 function decodeGlyph(slot) {
   const a = slot.geometry.getAttribute('uv');
   const u0 = a.getX(0);
@@ -677,6 +682,231 @@ sweep('STABILITY sweep', () => {
     console.log('INFO STABILITY sweep: global.gc unavailable (rerun with node --expose-gc for the heap check); scene child count stands in');
   }
   check('STABILITY sweep: autoClear restored after burst', renderer.autoClear === true);
+  h.dispose();
+});
+
+// ============================================================================
+// Archetype element sweeps: 'match' (soccer scoreboard), 'objective'
+// (adventure relic counter + direction arrow), 'wave' (shooter wave badge).
+// ============================================================================
+
+const MATCH_US = 0x1f4fa8;
+const MATCH_THEM = 0xa8681f;
+const wrapA = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+const angDiff = (a, b) => Math.abs(wrapA(a - b));
+const carH = (x, y, heading, u = 0, boost = 0) => ({ car: { x, y, u, boost, heading } });
+
+// --- 18. MATCH sweep -------------------------------------------------------------
+sweep('MATCH sweep', () => {
+  const h = createHud(makeSpec({ hud: { elements: ['match'] } }), { width: 512, height: 288 });
+  const bad = [];
+  for (const [us, them, wantUs, wantThem] of [
+    [0, 0, '00', '00'], [1, 0, '01', '00'], [3, 12, '03', '12'],
+    [99, 99, '99', '99'], [150, 7, '99', '07'],
+  ]) {
+    h.render(renderer, { ...carAt(0, 0), matchScore: { us, them } });
+    const slots = glyphSlotsOf(capturedScene); // [us0, us1, them0, them1]
+    const gu = readGlyphs(slots.slice(0, 2));
+    const gt = readGlyphs(slots.slice(2, 4));
+    if (gu !== wantUs || gt !== wantThem) bad.push(`${us}-${them}: '${gu}'-'${gt}' != '${wantUs}'-'${wantThem}'`);
+  }
+  check('MATCH sweep: zero-padded 2-digit sides, cap at 99', bad.length === 0, bad.join('; '));
+  h.render(renderer, carAt(0, 0)); // world without matchScore
+  check('MATCH sweep: undefined matchScore reads 0-0',
+    readGlyphs(glyphSlotsOf(capturedScene)) === '0000',
+    `got '${readGlyphs(glyphSlotsOf(capturedScene))}'`);
+  const usChip = byName(capturedScene, 'matchUsChip')[0];
+  const themChip = byName(capturedScene, 'matchThemChip')[0];
+  const dash = byName(capturedScene, 'matchDash')[0];
+  check('MATCH sweep: blue us chip left, amber them chip right, dash centered between',
+    !!usChip && !!themChip && !!dash &&
+    usChip.material.color.getHex() === MATCH_US && themChip.material.color.getHex() === MATCH_THEM &&
+    usChip.position.x + usChip.scale.x <= dash.position.x &&
+    dash.position.x + dash.scale.x <= themChip.position.x &&
+    approx((usChip.position.x + usChip.scale.x / 2) + (themChip.position.x + themChip.scale.x / 2), 512));
+  h.dispose();
+
+  // coexistence with lap: chips drop below the lap pip row (pips end at H-38)
+  const hb = createHud(makeSpec({ hud: { elements: ['lap', 'match'] } }), { width: 512, height: 288 });
+  hb.render(renderer, { ...carAt(0, 0), lap: 1, matchScore: { us: 2, them: 1 } });
+  const chip = byName(capturedScene, 'matchUsChip')[0];
+  check('MATCH sweep: chips sit below the lap pips when lap coexists',
+    chip.position.y + chip.scale.y <= 288 - 38 + 1e-6 && chip.position.y > 0,
+    `chipTop=${chip.position.y + chip.scale.y}`);
+  hb.dispose();
+});
+
+// --- 19. OBJECTIVE sweep -----------------------------------------------------------
+sweep('OBJECTIVE sweep', () => {
+  const h = createHud(makeSpec({ hud: { elements: ['objective'] } }), { width: 512, height: 288 });
+  const obj = (collected, total, targetX, targetY) => ({ collected, total, targetX, targetY });
+  const bad = [];
+  for (const [c, t, wantN, wantM] of [[0, 6, '0', '6'], [3, 14, '3', '14'], [14, 14, '14', '14'], [7, 8, '7', '8']]) {
+    h.render(renderer, { ...carH(0, 0, 0), objective: obj(c, t, 10, 0) });
+    const slots = glyphSlotsOf(capturedScene); // [gem, n0, n1, m0, m1]
+    if (decodeGlyph(slots[0]) !== 'gem') bad.push(`${c}/${t}: gem glyph missing`);
+    const gn = readGlyphs(slots.slice(1, 3));
+    const gm = readGlyphs(slots.slice(3, 5));
+    if (gn !== wantN || gm !== wantM) bad.push(`${c}/${t}: got '${gn}/${gm}'`);
+  }
+  check('OBJECTIVE sweep: gem icon + n/m counter digits', bad.length === 0, bad.join('; '));
+
+  // arrow: screen-space bearing, up = target dead ahead; positive relative
+  // bearing = screen right = negative mesh rotation (y-up ortho HUD). Swept at
+  // 0/90/180/-90 deg, including rotated car headings so the subtraction and
+  // wrap are both exercised.
+  const arrow = byName(capturedScene, 'objArrow')[0];
+  const badA = [];
+  for (const [cx, cy, heading, tx, ty, deg] of [
+    [0, 0, 0, 10, 0, 0],
+    [0, 0, 0, 0, 10, 90],
+    [0, 0, 0, -10, 0, 180],
+    [0, 0, 0, 0, -10, -90],
+    [5, -3, Math.PI / 2, 5, 7, 0],       // ahead along +y heading
+    [0, 0, Math.PI / 2, 10, 0, -90],     // +x target is 90deg clockwise of +y heading
+    [-2, 4, -Math.PI / 2, -2, -8, 0],    // ahead along -y heading
+    [1, 1, Math.PI, 1, -9, 90],
+  ]) {
+    h.render(renderer, { ...carH(cx, cy, heading), objective: obj(1, 6, tx, ty) });
+    const want = -wrapA((deg * Math.PI) / 180);
+    if (angDiff(arrow.rotation.z, want) > 1e-9) {
+      badA.push(`bearing ${deg}deg (h=${heading.toFixed(2)}): rot ${arrow.rotation.z.toFixed(5)} != ${want.toFixed(5)}`);
+    }
+  }
+  check('OBJECTIVE sweep: arrow rotation at 0/90/180/-90 deg bearings', badA.length === 0, badA.join('; '));
+  check('OBJECTIVE sweep: arrow rotates the mesh, not its geometry',
+    arrow.geometry.getAttribute('position').version === 0 && arrow.geometry.getAttribute('position').count === 3);
+
+  // undefined objective hides the whole element; a defined one restores it
+  h.render(renderer, carAt(0, 0));
+  check('OBJECTIVE sweep: undefined objective hides every mesh',
+    meshes(capturedScene).every((m) => !m.visible));
+  h.render(renderer, { ...carH(0, 0, 0), objective: obj(2, 6, 10, 0) });
+  const vis = meshes(capturedScene).filter((m) => m.visible).length;
+  // gem + '2' + slash + '6' + arrow (leading zero slots stay hidden)
+  check('OBJECTIVE sweep: element restores after objective returns', vis === 5, `visible=${vis}`);
+  h.dispose();
+});
+
+// --- 20. WAVE sweep ----------------------------------------------------------------
+sweep('WAVE sweep', () => {
+  const h = createHud(makeSpec({ hud: { elements: ['wave'] } }), { width: 512, height: 288 });
+  const bad = [];
+  for (const [w, want] of [[1, '1'], [4, '4'], [12, '12'], [99, '99'], [140, '99']]) {
+    h.render(renderer, { ...carAt(0, 0), wave: w });
+    const slots = glyphSlotsOf(capturedScene); // [W, A, V, E, d0, d1]
+    const word = slots.slice(0, 4).map((m) => decodeGlyph(m)).join('');
+    if (word !== 'WAVE') bad.push(`wave=${w}: letters '${word}'`);
+    if (!slots.slice(0, 4).every((m) => m.visible)) bad.push(`wave=${w}: letters hidden`);
+    const got = readGlyphs(slots.slice(4));
+    if (got !== want) bad.push(`wave=${w}: digits '${got}' != '${want}'`);
+  }
+  check('WAVE sweep: WAVE letter glyphs + digits, cap at 99', bad.length === 0, bad.join('; '));
+  const chip = byName(capturedScene, 'waveChip')[0];
+  check('WAVE sweep: badge chip behind the text', !!chip && chip.visible);
+  // asserted contract: wave 0 (pre-first-wave) and undefined both hide it all
+  h.render(renderer, { ...carAt(0, 0), wave: 0 });
+  const hid0 = meshes(capturedScene).every((m) => !m.visible);
+  h.render(renderer, carAt(0, 0));
+  const hidU = meshes(capturedScene).every((m) => !m.visible);
+  check('WAVE sweep: wave 0 and undefined wave hide the element', hid0 && hidU,
+    `wave0 hidden=${hid0} undef hidden=${hidU}`);
+  h.dispose();
+});
+
+// --- 21. COEXISTENCE sweep -----------------------------------------------------------
+sweep('COEXIST sweep', () => {
+  const ALL10 = [...ALL, 'match', 'objective', 'wave'];
+  const bad = [];
+  for (const [W, H, S] of [[512, 288, 1], [1024, 576, 1], [512, 288, 1.5], [1024, 576, 1.5]]) {
+    const h = createHud(
+      makeSpec({
+        hud: { elements: ALL10, scale: S },
+        weapon: { enabled: true, ammoMax: 24 },
+        entities: { monsters: [{ type: 'chaser', count: 3 }] },
+      }),
+      { width: W, height: H },
+    );
+    h.render(renderer, {
+      car: { x: 5, y: -8, u: 20, boost: 40, heading: 0.7 },
+      health: 66,
+      ammo: 9,
+      score: 4242,
+      lap: 2,
+      matchScore: { us: 3, them: 2 },
+      objective: { collected: 4, total: 9, targetX: 60, targetY: -30 },
+      wave: 5,
+      track: boxTrack(50, 50),
+      entities: {
+        monsters: [
+          { x: 0, y: 0, alive: true },
+          { x: 10, y: 5, alive: true },
+          { x: -20, y: 9, alive: true },
+        ],
+      },
+    });
+    const sc = capturedScene;
+    sc.updateMatrixWorld(true);
+    for (const m of meshes(sc)) {
+      if (!m.visible) continue;
+      const b = bboxOf(m);
+      if (b.minX < -1e-6 || b.minY < -1e-6 || b.maxX > W + 1e-6 || b.maxY > H + 1e-6) {
+        bad.push(`${W}x${H}@${S} ${m.name || 'mesh'} [${b.minX.toFixed(1)},${b.minY.toFixed(1)},${b.maxX.toFixed(1)},${b.maxY.toFixed(1)}]`);
+      }
+    }
+    // top-center stack order: lap band, then match chips, objective, wave
+    const topOf = (name) => bboxOf(byName(sc, name)[0]).maxY;
+    const chipTop = topOf('matchUsChip');
+    const gemTop = topOf('objGem');
+    const waveTop = topOf('waveChip');
+    if (!(chipTop <= H - 38 * S + 1e-6 && gemTop < chipTop - 24 * S + 1e-6 && waveTop < gemTop)) {
+      bad.push(`${W}x${H}@${S} stack: pipBottom=${H - 38 * S} chipTop=${chipTop.toFixed(1)} gemTop=${gemTop.toFixed(1)} waveTop=${waveTop.toFixed(1)}`);
+    }
+    h.dispose();
+  }
+  check('COEXIST sweep: all 10 elements in-frame + top-center stack ordered (2 sizes x 2 scales)',
+    bad.length === 0, bad.slice(0, 8).join('; '));
+});
+
+// --- 22. NEW-ELEMENT STABILITY sweep ---------------------------------------------------
+sweep('NEW-ELEMENT STABILITY sweep', () => {
+  const h = createHud(
+    makeSpec({ hud: { elements: ['match', 'objective', 'wave'] } }),
+    { width: 512, height: 288 },
+  );
+  const w = {
+    car: { x: 0, y: 0, u: 0, boost: 0, heading: 0 },
+    matchScore: { us: 0, them: 0 },
+    objective: { collected: 0, total: 9, targetX: 10, targetY: 0 },
+    wave: 0,
+  };
+  h.render(renderer, w);
+  const sc = capturedScene;
+  const nMeshes = meshes(sc).length;
+  const nChildren = sc.children.length;
+  // 7 per element: match 2 chips+dash+4 digits | objective gem+2n+slash+2m+arrow
+  // | wave chip+WAVE+2 digits
+  check('NEW-ELEMENT STABILITY: match+objective+wave -> 21 meshes', nMeshes === 21, `got ${nMeshes}`);
+  let seed = 0xBADD1E;
+  const rnd = () => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  for (let i = 0; i < 200; i++) {
+    w.car.x = (rnd() - 0.5) * 200;
+    w.car.y = (rnd() - 0.5) * 200;
+    w.car.heading = (rnd() - 0.5) * Math.PI * 2;
+    w.matchScore = rnd() < 0.1 ? undefined : { us: (rnd() * 130) | 0, them: (rnd() * 130) | 0 };
+    w.objective = rnd() < 0.15
+      ? undefined
+      : { collected: (rnd() * 15) | 0, total: 14, targetX: (rnd() - 0.5) * 400, targetY: (rnd() - 0.5) * 400 };
+    w.wave = rnd() < 0.15 ? undefined : (rnd() * 12) | 0;
+    h.render(renderer, w);
+  }
+  check('NEW-ELEMENT STABILITY: 200 seeded renders keep child/mesh counts constant',
+    sc.children.length === nChildren && meshes(sc).length === nMeshes,
+    `children ${nChildren} -> ${sc.children.length}, meshes ${nMeshes} -> ${meshes(sc).length}`);
+  check('NEW-ELEMENT STABILITY: autoClear restored after burst', renderer.autoClear === true);
   h.dispose();
 });
 

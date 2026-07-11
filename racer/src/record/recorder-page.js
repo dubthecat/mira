@@ -40,7 +40,7 @@ window.__init = (config) => {
   renderer.setPixelRatio(1);
   renderer.setSize(config.width, config.height);
   document.body.appendChild(renderer.domElement);
-  view = createView(world.track, { width: config.width, height: config.height, spec });
+  view = createView(world, { width: config.width, height: config.height });
   hud = createHud(spec, { width: config.width, height: config.height });
 
   // unrecorded warmup for varied starting states (speed, mid-corner, ...).
@@ -60,20 +60,24 @@ window.__init = (config) => {
 
   return {
     seed: world.seed,
-    trackLength: Math.round(world.track.length * 100) / 100,
+    // trackless modes (arena/openfield archetypes) report 0
+    trackLength: world.track ? Math.round(world.track.length * 100) / 100 : 0,
     actionKeys: world.actionKeys,
     specName: spec.name,
   };
 };
 
-// Record n frames; returns capture data for each.
-window.__stepBatch = (n) => {
+// Record n frames; returns capture data for each. fmt: 'png' (lossless into
+// the H.264 encode) or 'jpeg' (q0.92 — faster capture, negligible extra loss
+// under CRF-18 H.264; the recorder exposes it as --jpeg).
+window.__stepBatch = (n, fmt = 'png') => {
   const frames = [];
   const actions = [];
   const physics = [];
+  const mime = fmt === 'jpeg' ? 'image/jpeg' : 'image/png';
   for (let i = 0; i < n; i++) {
     // capture state S_t (already rendered), physics of the same instant
-    frames.push(renderer.domElement.toDataURL('image/png'));
+    frames.push(renderer.domElement.toDataURL(mime, 0.92));
     physics.push(world.snapshot());
     // apply action K_t -> S_{t+1}
     const { keys } = world.stepFrame();
@@ -89,10 +93,10 @@ window.__episodeMeta = () => ({
   seed: world.seed,
   frames: world.frame - recordStartFrame,
   events: world.events.map((e) => ({ ...e, frame: e.frame - recordStartFrame })),
-  laps: world.lap,
+  laps: world.lap || 0,
   score: world.score,
-  progress: Math.round(world.progress),
-  trackLength: Math.round(world.track.length * 100) / 100,
+  progress: Math.round(world.progress || 0),
+  trackLength: world.track ? Math.round(world.track.length * 100) / 100 : 0,
 });
 
 window.__ready = true;
